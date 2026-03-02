@@ -1,0 +1,4 @@
+Phase 0: Foundation
+- [x] Adapter interface [COMPLETED]
+- [ ] PTY runtime baseline
+- [ ] Basic TUI shell
