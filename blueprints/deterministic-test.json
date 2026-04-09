@@ -1,0 +1,98 @@
+{
+  "id": "deterministic-test",
+  "name": "Deterministic Pipeline Test",
+  "version": "1.0.0",
+  "entryNodeId": "create-branch",
+  "maxDurationMs": 60000,
+  "defaultContext": {
+    "cwd": ".",
+    "env": {},
+    "ruleFiles": [],
+    "allowedTools": [],
+    "store": {}
+  },
+  "nodes": [
+    {
+      "id": "create-branch",
+      "kind": "deterministic",
+      "label": "Create feature branch",
+      "op": {
+        "type": "git",
+        "action": "branch",
+        "params": {
+          "name": "test/deterministic-pipeline"
+        }
+      },
+      "timeoutMs": 10000
+    },
+    {
+      "id": "write-file",
+      "kind": "deterministic",
+      "label": "Write test file",
+      "op": {
+        "type": "file",
+        "action": "write",
+        "path": "test-output.txt",
+        "content": "Hello from the deterministic pipeline!\nTimestamp will be added by the next node.\n"
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "append-timestamp",
+      "kind": "deterministic",
+      "label": "Append timestamp to file",
+      "op": {
+        "type": "shell",
+        "command": "date",
+        "args": ["+%Y-%m-%dT%H:%M:%S"]
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "read-file",
+      "kind": "deterministic",
+      "label": "Read back test file",
+      "op": {
+        "type": "file",
+        "action": "read",
+        "path": "test-output.txt"
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "run-typecheck",
+      "kind": "deterministic",
+      "label": "Run TypeScript type-check",
+      "op": {
+        "type": "shell",
+        "command": "npx",
+        "args": ["tsc", "--noEmit"]
+      },
+      "timeoutMs": 30000,
+      "exitCodeMap": {
+        "0": "success",
+        "1": "failure",
+        "2": "failure"
+      }
+    },
+    {
+      "id": "cleanup",
+      "kind": "deterministic",
+      "label": "Delete test file",
+      "op": {
+        "type": "file",
+        "action": "delete",
+        "path": "test-output.txt"
+      },
+      "timeoutMs": 5000
+    }
+  ],
+  "edges": [
+    { "from": "create-branch", "to": "write-file", "on": "success" },
+    { "from": "write-file", "to": "append-timestamp", "on": "success" },
+    { "from": "append-timestamp", "to": "read-file", "on": "success" },
+    { "from": "read-file", "to": "run-typecheck", "on": "success" },
+    { "from": "run-typecheck", "to": "cleanup", "on": "success" },
+    { "from": "run-typecheck", "to": "cleanup", "on": "failure" }
+  ]
+}

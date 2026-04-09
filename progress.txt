@@ -1,0 +1,14 @@
+Phase 0: Foundation
+- [x] Adapter interface [COMPLETED]
+- [x] PTY runtime baseline [COMPLETED]
+- [ ] Basic TUI shell
+
+---
+- Task: PTY runtime baseline
+- Status: COMPLETED
+- Summary: Implemented a cross-platform PTY abstraction in `src/runtime/pty.ts` using `node-pty`. Added support for ConPTY on Windows and standardized session lifecycle management. Updated `BaseProviderAdapter` and `ClaudeAdapter` to utilize the new runtime.
+
+---
+- Task: Adapter interface
+- Status: COMPLETED
+- Summary: Defined IProviderAdapter interface and BaseProviderAdapter. Created initial adapter implementations for Claude, Gemini, and Codex. Setup project with TypeScript.

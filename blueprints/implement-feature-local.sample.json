@@ -1,0 +1,21 @@
+{
+  "id": "implement-feature-local-sample",
+  "name": "Implement Feature (Local-Only)",
+  "version": "1.0.0",
+  "entryNodeId": "create-worktree",
+  "defaultContext": {
+    "cwd": "N:/Aladeen/.aladeen/worktrees/sample",
+    "env": {},
+    "ruleFiles": [],
+    "allowedTools": [],
+    "store": {
+      "taskId": "sample-task",
+      "prompt": "Add a --dry-run option to run-local-feature.",
+      "targetPaths": ["src/**"]
+    }
+  },
+  "maxDurationMs": 2700000,
+  "maxTotalRetries": 5,
+  "nodes": [],
+  "edges": []
+}
