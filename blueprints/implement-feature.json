@@ -1,0 +1,149 @@
+{
+  "id": "implement-feature",
+  "name": "Implement and Verify a Code Change",
+  "version": "1.0.0",
+  "entryNodeId": "create-branch",
+  "maxDurationMs": 600000,
+  "maxTotalRetries": 5,
+  "defaultContext": {
+    "cwd": ".",
+    "env": {},
+    "ruleFiles": ["CLAUDE.md"],
+    "allowedTools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+    "store": {
+      "featureDescription": "Add a health-check endpoint that returns JSON with uptime and version"
+    }
+  },
+  "nodes": [
+    {
+      "id": "create-branch",
+      "kind": "deterministic",
+      "label": "Create feature branch",
+      "op": {
+        "type": "git",
+        "action": "branch",
+        "params": {
+          "name": "feature/auto-implemented"
+        }
+      },
+      "timeoutMs": 10000
+    },
+    {
+      "id": "checkout-branch",
+      "kind": "deterministic",
+      "label": "Checkout feature branch",
+      "op": {
+        "type": "git",
+        "action": "checkout",
+        "params": {
+          "ref": "feature/auto-implemented"
+        }
+      },
+      "timeoutMs": 10000
+    },
+    {
+      "id": "implement",
+      "kind": "agentic",
+      "label": "Implement the feature",
+      "adapterId": "claude",
+      "prompt": "Read the project structure and implement the following feature: Add a health-check endpoint that returns JSON with uptime and version. Follow existing code patterns and conventions. Create or modify the minimum files necessary.",
+      "maxRetries": 0,
+      "timeoutMs": 180000,
+      "contextOverrides": {
+        "allowedTools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
+      }
+    },
+    {
+      "id": "lint",
+      "kind": "deterministic",
+      "label": "Run TypeScript type-check",
+      "op": {
+        "type": "shell",
+        "command": "npx",
+        "args": ["tsc", "--noEmit"]
+      },
+      "timeoutMs": 30000,
+      "exitCodeMap": {
+        "0": "success",
+        "1": "retry",
+        "2": "failure"
+      }
+    },
+    {
+      "id": "fix-lint",
+      "kind": "agentic",
+      "label": "Fix lint/type errors",
+      "adapterId": "claude",
+      "prompt": "Run `npx tsc --noEmit` to see the current TypeScript errors, then fix ALL type errors. Do not introduce new functionality -- only fix the type errors reported by the compiler.",
+      "maxRetries": 1,
+      "timeoutMs": 120000,
+      "contextOverrides": {
+        "allowedTools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
+      }
+    },
+    {
+      "id": "test",
+      "kind": "deterministic",
+      "label": "Run tests",
+      "op": {
+        "type": "shell",
+        "command": "npx",
+        "args": ["vitest", "run", "--reporter=verbose"]
+      },
+      "timeoutMs": 60000,
+      "exitCodeMap": {
+        "0": "success",
+        "1": "retry",
+        "2": "failure"
+      }
+    },
+    {
+      "id": "fix-tests",
+      "kind": "agentic",
+      "label": "Fix failing tests",
+      "adapterId": "claude",
+      "prompt": "Run `npx vitest run --reporter=verbose` to see the current test failures, then fix ALL failing tests. If the test expectations are wrong, update them to match the implementation. If the implementation is wrong, fix the implementation. Do not skip or delete tests.",
+      "maxRetries": 2,
+      "timeoutMs": 180000,
+      "contextOverrides": {
+        "allowedTools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
+      }
+    },
+    {
+      "id": "stage",
+      "kind": "deterministic",
+      "label": "Stage all changes",
+      "op": {
+        "type": "shell",
+        "command": "git",
+        "args": ["add", "-A"]
+      },
+      "timeoutMs": 10000
+    },
+    {
+      "id": "commit",
+      "kind": "deterministic",
+      "label": "Commit changes",
+      "op": {
+        "type": "shell",
+        "command": "git",
+        "args": ["commit", "-m", "feat: auto-implemented feature via Aladeen blueprint"]
+      },
+      "timeoutMs": 15000
+    }
+  ],
+  "edges": [
+    { "from": "create-branch", "to": "checkout-branch", "on": "success" },
+    { "from": "checkout-branch", "to": "implement", "on": "success" },
+    { "from": "implement", "to": "lint", "on": "success" },
+    { "from": "lint", "to": "test", "on": "success" },
+    { "from": "lint", "to": "fix-lint", "on": "retry" },
+    { "from": "fix-lint", "to": "lint", "on": "success" },
+    { "from": "fix-lint", "to": "lint", "on": "failure" },
+    { "from": "test", "to": "stage", "on": "success" },
+    { "from": "test", "to": "fix-tests", "on": "retry" },
+    { "from": "fix-tests", "to": "test", "on": "success" },
+    { "from": "fix-tests", "to": "test", "on": "failure" },
+    { "from": "stage", "to": "commit", "on": "success" }
+  ]
+}

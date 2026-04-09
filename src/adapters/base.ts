@@ -10,10 +10,17 @@ export abstract class BaseProviderAdapter implements IProviderAdapter {
 
   abstract preflight(): Promise<PreflightResult>;
   
-  abstract startSession(options: SessionOptions): Promise<{
+  async startSession(_options: SessionOptions): Promise<{
     pty: IPty;
     emitter: (event: SessionEvent) => void;
-  }>;
+  }> {
+    this.eventEmitter = (_event: SessionEvent) => {
+      // Logic for session-wide event management (if any)
+    };
+
+    // Concrete adapters must override this to provide the correct binary and args.
+    throw new Error(`startSession not implemented for provider: ${this.id}`);
+  }
 
   async sendInput(text: string): Promise<void> {
     if (!this.pty) {

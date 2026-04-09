@@ -1,0 +1,91 @@
+{
+  "id": "implement-feature-deterministic",
+  "name": "Implement Feature (deterministic-only test)",
+  "version": "1.0.0",
+  "entryNodeId": "simulate-implement",
+  "maxDurationMs": 120000,
+  "maxTotalRetries": 3,
+
+  "defaultContext": {
+    "cwd": ".",
+    "env": {},
+    "ruleFiles": [],
+    "allowedTools": [],
+    "store": {}
+  },
+
+  "nodes": [
+    {
+      "id": "simulate-implement",
+      "label": "Simulate: write new feature file",
+      "kind": "deterministic",
+      "op": {
+        "type": "file",
+        "action": "write",
+        "path": "src/hello.ts",
+        "content": "export function hello(name: string): string {\n  return `Hello, ${name}!`;\n}\n"
+      }
+    },
+    {
+      "id": "lint",
+      "label": "Type-check with tsc",
+      "kind": "deterministic",
+      "op": {
+        "type": "shell",
+        "command": "node",
+        "args": ["node_modules/typescript/lib/tsc.js", "--noEmit"]
+      },
+      "timeoutMs": 30000
+    },
+    {
+      "id": "fix-lint",
+      "label": "Simulate: fix lint errors (rewrite clean file)",
+      "kind": "deterministic",
+      "op": {
+        "type": "file",
+        "action": "write",
+        "path": "src/hello.ts",
+        "content": "export function hello(name: string): string {\n  return `Hello, ${name}!`;\n}\n"
+      }
+    },
+    {
+      "id": "verify-clean",
+      "label": "Verify: check git diff shows our change",
+      "kind": "deterministic",
+      "op": {
+        "type": "shell",
+        "command": "git",
+        "args": ["diff", "--stat"]
+      }
+    },
+    {
+      "id": "stage",
+      "label": "Stage all changes",
+      "kind": "deterministic",
+      "op": {
+        "type": "shell",
+        "command": "git",
+        "args": ["add", "-A"]
+      }
+    },
+    {
+      "id": "commit",
+      "label": "Commit changes",
+      "kind": "deterministic",
+      "op": {
+        "type": "shell",
+        "command": "git",
+        "args": ["commit", "-m", "feat: add hello function (automated by aladeen)"]
+      }
+    }
+  ],
+
+  "edges": [
+    { "from": "simulate-implement", "to": "lint" },
+    { "from": "lint", "to": "verify-clean", "on": "success" },
+    { "from": "lint", "to": "fix-lint", "on": "failure" },
+    { "from": "fix-lint", "to": "lint" },
+    { "from": "verify-clean", "to": "stage" },
+    { "from": "stage", "to": "commit" }
+  ]
+}

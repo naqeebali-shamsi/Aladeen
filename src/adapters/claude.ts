@@ -1,7 +1,7 @@
-
 import { BaseProviderAdapter } from './base.js';
 import { PreflightResult, SessionOptions, SessionEvent, AdapterCapabilities } from './types.js';
 import { IPty } from 'node-pty';
+import { PtyRuntime } from '../runtime/pty.js';
 
 export class ClaudeAdapter extends BaseProviderAdapter {
   id = 'claude';
@@ -13,8 +13,29 @@ export class ClaudeAdapter extends BaseProviderAdapter {
   }
 
   async startSession(options: SessionOptions): Promise<{ pty: IPty; emitter: (event: SessionEvent) => void; }> {
-    // TODO: Spawn claude via node-pty
-    throw new Error('Claude: startSession not implemented');
+    this.eventEmitter = (_event: SessionEvent) => {
+      // For now, Claude doesn't need special transformations, but here is where they would go.
+    };
+
+    const cmd = 'claude'; // Assumes `claude` CLI is on PATH
+    const args: string[] = []; // Launch default interactive experience
+
+    const ptyProcess = PtyRuntime.spawn(cmd, args, {
+      cwd: options.cwd,
+      env: options.env
+    });
+
+    this.pty = ptyProcess.pty;
+
+    const transformer = PtyRuntime.createEventTransformer(this.eventEmitter);
+
+    ptyProcess.onData((data: string) => transformer.onData(data));
+    ptyProcess.onExit(({ exitCode }: { exitCode: number }) => transformer.onExit(exitCode));
+
+    return {
+      pty: this.pty,
+      emitter: this.eventEmitter
+    };
   }
 
   async health() {

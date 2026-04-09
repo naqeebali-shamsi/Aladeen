@@ -4,7 +4,7 @@ import { IPty } from 'node-pty';
 export interface PreflightResult {
   success: boolean;
   message: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   errorDocLink?: string;
   suggestedFix?: string;
 }
@@ -18,7 +18,7 @@ export interface AdapterCapabilities {
 export type SessionEvent = 
   | { type: 'stdout_chunk'; content: string }
   | { type: 'stderr_chunk'; content: string }
-  | { type: 'tool_event'; name: string; args: any }
+  | { type: 'tool_event'; name: string; args: unknown }
   | { type: 'status_event'; status: 'ready' | 'running' | 'errored' | 'stopped' }
   | { type: 'final_response'; content: string };
 

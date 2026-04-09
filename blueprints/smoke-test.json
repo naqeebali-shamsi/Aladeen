@@ -1,0 +1,78 @@
+{
+  "id": "smoke-test",
+  "name": "Engine Smoke Test",
+  "version": "1.0.0",
+  "entryNodeId": "echo-hello",
+  "maxDurationMs": 30000,
+  "defaultContext": {
+    "cwd": "N:/Aladeen",
+    "env": {},
+    "ruleFiles": [],
+    "allowedTools": [],
+    "store": {}
+  },
+  "nodes": [
+    {
+      "id": "echo-hello",
+      "kind": "deterministic",
+      "label": "Echo hello",
+      "op": {
+        "type": "shell",
+        "command": "echo",
+        "args": ["Hello from Aladeen Blueprint Engine"]
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "git-status",
+      "kind": "deterministic",
+      "label": "Git status",
+      "op": {
+        "type": "shell",
+        "command": "git",
+        "args": ["status", "--short"]
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "write-file",
+      "kind": "deterministic",
+      "label": "Write test file",
+      "op": {
+        "type": "file",
+        "action": "write",
+        "path": "N:/Aladeen/.aladeen/smoke-test-output.txt",
+        "content": "Smoke test completed successfully.\n"
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "read-file",
+      "kind": "deterministic",
+      "label": "Read test file back",
+      "op": {
+        "type": "file",
+        "action": "read",
+        "path": "N:/Aladeen/.aladeen/smoke-test-output.txt"
+      },
+      "timeoutMs": 5000
+    },
+    {
+      "id": "cleanup",
+      "kind": "deterministic",
+      "label": "Delete test file",
+      "op": {
+        "type": "file",
+        "action": "delete",
+        "path": "N:/Aladeen/.aladeen/smoke-test-output.txt"
+      },
+      "timeoutMs": 5000
+    }
+  ],
+  "edges": [
+    { "from": "echo-hello", "to": "git-status", "on": "success" },
+    { "from": "git-status", "to": "write-file", "on": "success" },
+    { "from": "write-file", "to": "read-file", "on": "success" },
+    { "from": "read-file", "to": "cleanup", "on": "success" }
+  ]
+}

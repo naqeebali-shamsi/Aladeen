@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "implement-feature-local parameters",
+  "type": "object",
+  "required": [
+    "taskId",
+    "prompt",
+    "adapterId",
+    "repoRoot"
+  ],
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "prompt": { "type": "string", "minLength": 1 },
+    "adapterId": {
+      "type": "string",
+      "enum": ["local-ollama", "local-llama-cpp", "claude", "codex", "gemini"]
+    },
+    "repoRoot": { "type": "string", "minLength": 1 },
+    "baseBranch": { "type": "string", "default": "main" },
+    "targetPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["src/**"]
+    }
+  },
+  "additionalProperties": false
+}

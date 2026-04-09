@@ -302,3 +302,26 @@ Research was synthesized from provider docs and platform references available as
 - Windows ConPTY: https://learn.microsoft.com/en-us/windows/console/createpseudoconsole
 - Windows VT sequences: https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences
 - node-pty: https://github.com/microsoft/node-pty
+
+## 19. Local-First Autonomous PR Harness (V1 Addendum)
+### 19.1 Positioning
+Aladeen V1 local-first mode targets solo developers who need autonomous feature delivery without cloud model spend. The harness runs entirely with local model providers and deterministic quality gates.
+
+### 19.2 V1 Promise
+- Input: feature request.
+- Output: PR-ready local branch.
+- Constraints:
+  - local-only inference
+  - bounded retries and bounded run time
+  - deterministic pass gates (typecheck, lint, tests, repo policy)
+
+### 19.3 Reuse Strategy
+To avoid re-implementation risk in V1:
+- Graphify-style graph context can be used as the structure-aware retrieval layer.
+- MemPalace-style persistent memory can be used for long-horizon decision recall.
+- Paperclip-inspired governance patterns (budgeting and run trace discipline) guide policy design.
+
+### 19.4 V1 Non-Goals
+- Multi-user company orchestration.
+- Cloud fallback routing.
+- Full enterprise control-plane features.
