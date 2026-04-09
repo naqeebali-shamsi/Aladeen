@@ -17,3 +17,13 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local-only notes, specs, and changelog (keep in workspace, not in remote)
+/LINKEDIN_JOURNEY_NOTES.md
+/LOCAL_FIRST_AUTONOMY_SPEC.md
+/LOCAL_FIRST_DELIVERY_ROADMAP.md
+/PRD.md
+/RESEARCH_FINDINGS.md
+/BLUEPRINT_DESIGN.md
+/GROUND_RULES.md
+/CHANGELOG.md
