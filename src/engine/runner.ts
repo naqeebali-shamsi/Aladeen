@@ -193,6 +193,13 @@ export class BlueprintRunner implements IBlueprintRunner {
 
       // Mark running
       const exec = this.state!.nodeExecutions[nodeId]!;
+      // Re-entry counts toward the global retry budget. Without this, deterministic
+      // failure→fix→failure loops (e.g., lint→fix-lint→lint) could iterate forever
+      // because totalRetries was previously only bumped inside handleRetry for
+      // agentic nodes.
+      if (exec.attempts > 0) {
+        this.state!.totalRetries += 1;
+      }
       exec.status = 'running';
       exec.startedAt = exec.startedAt ?? new Date().toISOString();
       exec.attempts += 1;
