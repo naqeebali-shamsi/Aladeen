@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, writeFile, copyFile, unlink } from 'node:fs/promises';
+import path from 'node:path';
+import { readFile, writeFile, copyFile, unlink, mkdir } from 'node:fs/promises';
 import type {
   DeterministicNode,
   BlueprintContext,
@@ -134,9 +135,14 @@ export class DeterministicExecutor implements INodeExecutor {
   private async execFileOp(
     op: { type: 'file'; action: string; path: string; content?: string; dest?: string },
     _node: DeterministicNode,
-    _context: BlueprintContext
+    context: BlueprintContext
   ): Promise<Omit<NodeResult, 'durationMs'>> {
-    const { action, path: filePath, content, dest } = op;
+    const { action, content } = op;
+    // Resolve relative paths against context.cwd. Absolute paths pass through
+    // unchanged, so callers (e.g. scripts/run-blueprint.ts patchForWorktree)
+    // that pre-resolve paths still work.
+    const filePath = path.resolve(context.cwd, op.path);
+    const dest = op.dest ? path.resolve(context.cwd, op.dest) : undefined;
 
     switch (action) {
       case 'read': {
@@ -144,11 +150,13 @@ export class DeterministicExecutor implements INodeExecutor {
         return { outcome: 'success', output: { content: data }, summary: `Read ${filePath}` };
       }
       case 'write': {
+        await mkdir(path.dirname(filePath), { recursive: true });
         await writeFile(filePath, content ?? '', 'utf-8');
         return { outcome: 'success', output: { path: filePath }, summary: `Wrote ${filePath}` };
       }
       case 'copy': {
         if (!dest) return { outcome: 'failure', output: {}, error: 'Copy requires a "dest" field' };
+        await mkdir(path.dirname(dest), { recursive: true });
         await copyFile(filePath, dest);
         return { outcome: 'success', output: { src: filePath, dest }, summary: `Copied ${filePath} -> ${dest}` };
       }
