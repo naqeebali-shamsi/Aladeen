@@ -1,0 +1,52 @@
+{
+  "id": "smoke-agentic",
+  "name": "Smoke test: real Claude implements one tiny pure function",
+  "version": "1.0.0",
+  "entryNodeId": "implement",
+  "maxDurationMs": 240000,
+  "maxTotalRetries": 2,
+  "defaultContext": {
+    "cwd": ".",
+    "env": {},
+    "ruleFiles": [],
+    "allowedTools": ["Read", "Edit", "Write", "Bash", "Glob"],
+    "store": {}
+  },
+  "nodes": [
+    {
+      "id": "implement",
+      "kind": "agentic",
+      "label": "Claude implements formatDuration",
+      "adapterId": "claude",
+      "prompt": "Create a new file `src/utils/format-duration.ts` that exports a single pure function `formatDuration(ms: number): string`. The function must format a millisecond duration as a human-readable string: returns `\"42ms\"` when ms < 1000, `\"3.2s\"` when ms < 60000, `\"4m 12s\"` when ms < 3600000, and `\"2h 5m\"` otherwise. Use TypeScript strict types. Do not add any other files, do not modify any existing files, do not export anything else. Reply with the path you created and a one-line confirmation.",
+      "maxRetries": 0,
+      "timeoutMs": 180000
+    },
+    {
+      "id": "typecheck",
+      "kind": "deterministic",
+      "label": "Typecheck the new file",
+      "op": {
+        "type": "shell",
+        "command": "node",
+        "args": ["node_modules/typescript/lib/tsc.js", "--noEmit"]
+      },
+      "timeoutMs": 30000
+    },
+    {
+      "id": "verify-file-exists",
+      "kind": "deterministic",
+      "label": "Verify the new file exists",
+      "op": {
+        "type": "shell",
+        "command": "node",
+        "args": ["-e", "require('fs').accessSync('src/utils/format-duration.ts'); console.log('ok');"]
+      },
+      "timeoutMs": 5000
+    }
+  ],
+  "edges": [
+    { "from": "implement", "to": "verify-file-exists", "on": "success" },
+    { "from": "verify-file-exists", "to": "typecheck", "on": "success" }
+  ]
+}
