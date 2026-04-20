@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { mkdir, rm, stat, symlink } from 'node:fs/promises';
+import { mkdir, rm, stat, symlink, lstat, unlink } from 'node:fs/promises';
 
 const execFileAsync = promisify(execFile);
 
@@ -132,6 +132,23 @@ export class WorktreeManager {
     }
   }
 
+  /**
+   * Unlink any symbolic links inside the worktree (currently just node_modules)
+   * before destroying the directory. Without this, recursive deletes follow
+   * the link and destroy the target on Windows.
+   */
+  private async detachLinkedDeps(worktreePath: string): Promise<void> {
+    const link = path.join(worktreePath, 'node_modules');
+    try {
+      const ls = await lstat(link);
+      if (ls.isSymbolicLink()) {
+        await unlink(link);
+      }
+    } catch {
+      // Not present, not a link, or already detached — nothing to do.
+    }
+  }
+
   /** List all active aladeen-managed worktrees. */
   async list(): Promise<WorktreeInfo[]> {
     await this.ensureGitRepo();
@@ -154,6 +171,13 @@ export class WorktreeManager {
         'WORKTREE_NOT_FOUND'
       );
     }
+
+    // CRITICAL: detach any symlinked node_modules BEFORE removing the worktree.
+    // On Windows, `git worktree remove --force` (and rm -rf) descend into NTFS
+    // junctions and delete the link target. Without this step, removing a
+    // worktree wipes out the main repo's node_modules. Lesson learned the
+    // hard way during the orphaned-state work — see references/learnings.md.
+    await this.detachLinkedDeps(worktreePath);
 
     try {
       await this.git('worktree', 'remove', '--force', worktreePath);
