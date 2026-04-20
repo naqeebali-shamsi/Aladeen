@@ -32,7 +32,7 @@ when a fix lands.
 - **Node:** N/A (run-level)
 - **Evidence:** Both runs still have `status: "running"` in their persisted state files weeks after the user killed them. `currentNodeId: "lint"` is also stuck. The runner has no liveness/heartbeat that lets a fresh process detect "this run is orphaned."
 - **Suggested next action:** On runner startup or on `list-runs` invocation, sweep `.aladeen/runs/*.json` for `status: "running"` with `startedAt` older than `maxDurationMs * 2` (default ~20min) and rewrite to `status: "abandoned"` so they don't pollute future analysis.
-- **Status:** open
+- **Status:** resolved — `StatePersistence.sweepStale()` + `'abandoned'` status added to schema. `aladeen list-runs` sweeps before listing (use `--no-sweep` to skip). Tests in `src/engine/state.test.ts`. Verified end-to-end: both historical orphans correctly flipped to abandoned with reason `Marked abandoned by sweep: status=running with no completedAt, 4215047s since startedAt.`
 
 ## 2026-04-20 — first-real-agentic-run-success
 
@@ -42,6 +42,24 @@ when a fix lands.
 - **Evidence:** Headless `claude -p "..." --output-format json` completed in 32.9s, returned `Created src/utils/format-duration.ts — exports a single pure formatDuration(ms: number): string with the four bracketed formats.` Token usage: 8 input / 560 output. Downstream `verify-file-exists` and `typecheck` both passed first try. Total run: 34.4s.
 - **Suggested next action:** Track this baseline. Future regressions in agentic timing or token usage relative to this benchmark are worth investigating.
 - **Status:** resolved (informational baseline)
+
+## 2026-04-21 — worktree-remove-followed-junction (CRITICAL — discovered during fix)
+
+- **Run:** out-of-band — observed during the orphaned-state work, not from a saved run JSON
+- **Blueprint:** N/A (system bug in `WorktreeManager.remove()`)
+- **Node:** N/A
+- **Evidence:** After `git worktree remove --force` ran on a worktree that contained an NTFS junction to the main repo's `node_modules`, the main repo's `node_modules` was emptied. Required full `npm install` to restore. Cause: Windows tools that recursively delete a directory descend INTO junctions and delete the link target rather than just the link.
+- **Suggested next action:** `WorktreeManager.remove()` must `unlink()` any symlinks/junctions inside the worktree BEFORE invoking `git worktree remove`.
+- **Status:** resolved — `WorktreeManager.detachLinkedDeps()` runs before removal. Regression test in `src/isolation/worktree.test.ts` creates a fake `node_modules`, runs full create→remove cycle, asserts the sentinel file survives.
+- **Lesson for the skill itself:** Add a new pattern row to `SKILL.md` — *"main repo state damage from worktree cleanup"* — detection rule: any time `WorktreeManager.remove()` is changed, run the worktree.test.ts regression. This pattern emerged from a real-time mistake, exactly the class of failure this skill is supposed to prevent recurring.
+
+## 2026-04-21 — second-real-agentic-run-success (drift check)
+
+- **Run:** `31101d50-31f5-4ce8-b936-91c4ab08dead`
+- **Blueprint:** `smoke-agentic`
+- **Node:** `implement` (agentic adapter=`claude`, attempts: 1)
+- **Evidence:** Same prompt as `c607e199`. This run took 54.6s (vs 32.9s baseline) — a ~66% slowdown. Both succeeded; downstream gates passed first try. Likely API latency variance, but worth tracking if subsequent runs trend high.
+- **Status:** open (variance observation — needs ≥3 more samples before action)
 
 ## 2026-04-20 — successful-deterministic-blueprints
 
