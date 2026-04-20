@@ -208,7 +208,7 @@ export interface ExecutionState {
   /** The blueprint being executed */
   blueprintId: string;
   /** Overall status */
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'escalated';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'escalated' | 'abandoned';
   /** Per-node execution tracking */
   nodeExecutions: Record<string, NodeExecution>;
   /** The node currently being executed (null if done) */
@@ -245,7 +245,7 @@ export interface QualitySnapshot {
 export const ExecutionStateSchema = z.object({
   runId: z.string(),
   blueprintId: z.string(),
-  status: z.enum(['pending', 'running', 'completed', 'failed', 'escalated']),
+  status: z.enum(['pending', 'running', 'completed', 'failed', 'escalated', 'abandoned']),
   nodeExecutions: z.record(z.object({
     nodeId: z.string(),
     status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped']),

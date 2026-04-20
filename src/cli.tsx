@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { render } from 'ink';
 import { Command } from 'commander';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BlueprintSchema } from './engine/types.js';
 import type { Blueprint, ExecutionState } from './engine/types.js';
@@ -157,40 +157,36 @@ program
   .command('list-runs')
   .description('List saved blueprint runs from .aladeen/runs/')
   .option('--repo-root <path>', 'Repository root', process.cwd())
-  .action(async (opts: { repoRoot: string }) => {
-    const runsDir = path.join(opts.repoRoot, '.aladeen', 'runs');
-    try {
-      const files = await readdir(runsDir);
-      const jsonFiles = files.filter((f) => f.endsWith('.json'));
+  .option('--no-sweep', 'Skip the stale-run sweep (default: sweep before listing)')
+  .action(async (opts: { repoRoot: string; sweep: boolean }) => {
+    const persistence = new StatePersistence(opts.repoRoot);
 
-      if (jsonFiles.length === 0) {
-        console.log('No saved runs found.');
-        return;
+    if (opts.sweep) {
+      const swept = await persistence.sweepStale();
+      if (swept.length > 0) {
+        console.log(`Marked ${swept.length} stale run(s) as abandoned:`);
+        for (const id of swept) console.log(`  ${id}`);
+        console.log('');
       }
+    }
 
-      console.log(`Found ${jsonFiles.length} run(s):\n`);
+    const runs = await persistence.list();
+    if (runs.length === 0) {
+      console.log('No saved runs found.');
+      return;
+    }
 
-      for (const file of jsonFiles) {
-        try {
-          const raw = await readFile(path.join(runsDir, file), 'utf-8');
-          const state = JSON.parse(raw) as ExecutionState;
-          const runId = state.runId ?? file.replace('.json', '');
-          const status = state.status ?? 'unknown';
-          const started = state.startedAt ?? 'unknown';
-          const completed = state.completedAt ?? 'in progress';
-
-          console.log(`  ${runId}`);
-          console.log(`    Blueprint: ${state.blueprintId}`);
-          console.log(`    Status:    ${status}`);
-          console.log(`    Started:   ${started}`);
-          console.log(`    Completed: ${completed}`);
-          console.log('');
-        } catch {
-          console.log(`  ${file} (unreadable)`);
-        }
+    console.log(`Found ${runs.length} run(s):\n`);
+    for (const state of runs) {
+      console.log(`  ${state.runId}`);
+      console.log(`    Blueprint: ${state.blueprintId}`);
+      console.log(`    Status:    ${state.status}`);
+      console.log(`    Started:   ${state.startedAt}`);
+      console.log(`    Completed: ${state.completedAt ?? 'in progress'}`);
+      if (state.escalationReason) {
+        console.log(`    Reason:    ${state.escalationReason.slice(0, 120)}`);
       }
-    } catch {
-      console.log('No .aladeen/runs/ directory found. No runs have been executed yet.');
+      console.log('');
     }
   });
 
