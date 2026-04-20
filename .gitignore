@@ -18,6 +18,12 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Graphify temp + per-run cache (commit the report and graph.json, not the cache)
+.graphify_python
+.graphify_*.json
+graphify-out/cache/
+graphify-out/.graphify_chunk_*.json
+
 # Local-only notes, specs, and changelog (keep in workspace, not in remote)
 /LINKEDIN_JOURNEY_NOTES.md
 /LOCAL_FIRST_AUTONOMY_SPEC.md
