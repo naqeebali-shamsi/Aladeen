@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, stat, symlink } from 'node:fs/promises';
 
 const execFileAsync = promisify(execFile);
 
@@ -29,12 +29,24 @@ export class WorktreeError extends Error {
   }
 }
 
+export interface WorktreeManagerOptions {
+  /**
+   * Junction `node_modules` from the main repo into each new worktree.
+   * `git worktree add` does not bring node_modules, so deterministic gates
+   * (lint/typecheck/test) fail immediately in fresh worktrees. Defaults true.
+   * Disable when the worktree's package.json may legitimately differ.
+   */
+  linkNodeModules?: boolean;
+}
+
 export class WorktreeManager {
   private readonly worktreeRoot: string;
   private readonly branchPrefix = 'aladeen';
+  private readonly linkNodeModules: boolean;
 
-  constructor(private readonly repoRoot: string) {
+  constructor(private readonly repoRoot: string, options: WorktreeManagerOptions = {}) {
     this.worktreeRoot = path.join(repoRoot, '.aladeen', 'worktrees');
+    this.linkNodeModules = options.linkNodeModules ?? true;
   }
 
   /** Create a new worktree for an agent task. */
@@ -75,6 +87,10 @@ export class WorktreeManager {
       );
     }
 
+    if (this.linkNodeModules) {
+      await this.linkNodeModulesIfPresent(worktreePath);
+    }
+
     return {
       taskId,
       path: worktreePath,
@@ -82,6 +98,38 @@ export class WorktreeManager {
       baseBranch: base,
       createdAt: new Date(),
     };
+  }
+
+  /**
+   * Junction the main repo's node_modules into the worktree so deterministic
+   * gates can resolve dependencies. Best-effort: if the link can't be created
+   * (no node_modules in repo, junction unsupported, target already present),
+   * leave it alone — the agent or blueprint can run `npm install` instead.
+   */
+  private async linkNodeModulesIfPresent(worktreePath: string): Promise<void> {
+    const sourceModules = path.join(this.repoRoot, 'node_modules');
+    const targetModules = path.join(worktreePath, 'node_modules');
+
+    try {
+      const s = await stat(sourceModules);
+      if (!s.isDirectory()) return;
+    } catch {
+      return; // No node_modules in the main repo; nothing to link.
+    }
+
+    try {
+      await stat(targetModules);
+      return; // Target already exists; do not overwrite.
+    } catch {
+      // expected — fall through to create the junction
+    }
+
+    try {
+      await symlink(sourceModules, targetModules, 'junction');
+    } catch {
+      // Junction failed (e.g., POSIX without symlink permission). Non-fatal:
+      // the worktree is still usable — blueprints can install deps explicitly.
+    }
   }
 
   /** List all active aladeen-managed worktrees. */
