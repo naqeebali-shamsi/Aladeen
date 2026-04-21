@@ -44,3 +44,31 @@ only its `Status:` line — do not delete or reorder.
 **Signals consulted:** roadmap gaps, god-node coverage (graphify), prior decisions (both #1 and #2 completed — no de-dup needed), recent commits (last 24h = heavy test additions; weighted down to avoid piling more tests in the same areas).
 
 **Notes:** Roadmap M4 now fully green (3/3 metrics backed). The decisions log is starting to show a signal: picks rooted in roadmap metrics produce high-certainty wins (M4-2 and M4-3 both landed clean, no bugs surfaced). Graph-fragility picks are higher variance — they surface bugs (pick #1) but sometimes those bugs eat the time budget.
+
+---
+
+## 2026-04-22 — 2 picks (third invocation)
+
+**Picks:**
+
+1. **Tests for `agentic-executor.ts` (the deferred pick)** (score: 5) — `Status: completed (commit 080614a)` — added `src/engine/agentic-executor.test.ts` with 10 tests: `resolveTemplate` (3 cases incl. JSON-stringify for non-strings), `injectContext` (section ordering + no-op pass-through), `toNodeResult` decision branches (success, timeout→failure, exit>0→retry, unknown adapter→failure without detector call), and an E2E assertion that `{{store.lintOutput}}` reaches the detector. Exported `resolveTemplate` and `injectContext` as pure helpers — no behavioral change. Stubs via `vi.spyOn(CompletionDetector.prototype, 'execute')`. All 50 suite tests pass; typecheck clean. No bugs surfaced — the decision logic was correct as written.
+   - Rationale: explicitly deferred from invocation #2; still zero test references to `AgenticExecutor`, `toNodeResult`, `resolveTemplate`, or `injectContext` (verified via grep on `**/*.test.ts`). This file owns the retry-vs-failure decision on every agentic run (`src/engine/agentic-executor.ts:113-114` — exit-code/timeout branch) and the `{{store.key}}` template path that feeds fix-lint-style loops. Untested decision logic on the hot path.
+   - Evidence: `src/engine/agentic-executor.ts` (170 lines, no test file); graphify marks it a god-node; smoke-agentic runs (`c607e199`, `31101d50`) exercise this file end-to-end in prod.
+   - Acceptance: `src/engine/agentic-executor.test.ts` exists with ≥4 tests — (a) `resolveTemplate` replaces `{{store.key}}` and passes through missing keys, (b) `toNodeResult` maps `success=true → success`, (c) `toNodeResult` maps timeout error → `failure` (not retry), (d) `toNodeResult` maps exit>0 non-timeout → `retry`. Stub the `CompletionDetector` via DI or module mock.
+   - Effort: small-medium (~45min).
+
+2. **End-to-end test for M1 acceptance metric: "100% of runs include policy metadata"** (score: 4) — `Status: suggested`
+   - Rationale: `runner.ts:122-123` populates `state.runPolicy` but no test asserts a completed run actually has it set. `state.test.ts` only round-trips a hand-crafted state with `runPolicy` pre-attached — that validates persistence, not the runner's contract. The M1 metric is today unfalsifiable from the test suite.
+   - Evidence: `src/engine/runner.ts:43,63,71,122-123` (runMode wiring); `src/engine/state.test.ts:27,35,77,82` (only uses pre-populated runPolicy); `LOCAL_FIRST_DELIVERY_ROADMAP.md:10` (metric).
+   - Acceptance: new test in `runner.test.ts` runs a trivial blueprint with `runMode: 'local-only'`, asserts `finalState.runPolicy.mode === 'local-only'` and `cloudFallbackAllowed === false`. Repeat with default (no runMode) asserting a safe default is still set.
+   - Effort: small (~20min).
+
+**Picks considered but dropped:**
+
+- Drift sample for `second-real-agentic-run-success` — still open in postrun, but needs 3+ new samples and each costs a real agentic run; cost > value in a session.
+- Tests for `src/adapters/base.ts` — abstract PTY shim, no decision logic; score < 3.
+- Tests for `local-runner-options.ts` — pure factory with env-var branches; score ≈ 2.
+
+**Signals consulted:** prior decisions (deferred pick #2 still open), god-node coverage (graphify), roadmap milestones M1–M5, open postrun patterns, recent commits (last 48h = mostly test/docs; weighted accordingly), source-vs-test file map.
+
+**Notes:** Roadmap M1, M2, M3, M4 all turn out to be code-backed — the remaining gaps are *test-backed* not *code-backed*. That's a meaningful shift in the signal landscape and argues for raising the weight of "acceptance metric has code but no asserting test" relative to "acceptance metric unimplemented." Not adjusting the SKILL.md weights yet — one observation isn't enough; flagging for the next invocation to confirm.
