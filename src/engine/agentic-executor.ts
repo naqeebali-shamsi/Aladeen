@@ -131,7 +131,7 @@ export class AgenticExecutor implements INodeExecutor {
  * Replace {{key}} and {{store.key}} placeholders in a prompt template
  * with values from the context store.
  */
-function resolveTemplate(template: string, store: Record<string, unknown>): string {
+export function resolveTemplate(template: string, store: Record<string, unknown>): string {
   return template.replace(/\{\{([^}]+)\}\}/g, (_match, key: string) => {
     const trimmed = key.trim();
     // Support both "key" and "store.key" syntax
@@ -143,7 +143,7 @@ function resolveTemplate(template: string, store: Record<string, unknown>): stri
   });
 }
 
-function injectContext(
+export function injectContext(
   prompt: string,
   assembled: {
     graphContext?: string;
