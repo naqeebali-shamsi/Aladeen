@@ -24,3 +24,23 @@ only its `Status:` line — do not delete or reorder.
 **Signals consulted:** open postrun patterns (1, low-leverage), god-node coverage (graphify), hot-code commits (last 14d), roadmap milestones, prior decisions (none — first run).
 
 **Notes:** The graphify graph paid off here — it surfaced `BlueprintRunner`, `WorktreeManager`, and `base.ts` as the highest-degree code nodes; all three now have tests except `base.ts`. The agentic stack untested situation is the single biggest fragility on the board.
+
+---
+
+## 2026-04-21 22:15 — 1 pick (second invocation)
+
+**Picks:**
+
+1. **Failure-bucketing utility closes M4 metric** (score: 7) — `Status: completed (commit b5df67d)` — added `src/engine/failure-buckets.ts` exporting `bucketFailures(runs): FailureBucket[]` plus 6 unit tests. Groups by `(nodeId, outcome)` with run-level bucket for escalated/abandoned, sorted by count descending, capped at 5 sample runIds/errors, error snippets truncated at 200 chars. Verified on live data: the 8 persisted runs bucket into `[{nodeId: '__run__', outcome: 'abandoned', count: 2, sampleRunIds: [690cbbfe..., b9428fa6...]}]` — the two historical orphans correctly surface as the dominant failure pattern. Roadmap M4 metric 3 ("failure reasons structured enough to bucket by gate/outcome") now backed by code AND live data.
+   - Roadmap M4: "Failure reasons are structured enough to bucket by gate/outcome" — partial before; `gateOutcomes` + `escalationReason` existed but no grouping function.
+   - Signals: roadmap metric without code backing (×4), last unmet M4 metric, evidence-cited from `.aladeen/runs/*.json`.
+   - Acceptance: `bucketFailures()` groups 8 live runs; test asserts sort order, sample cap, error truncation.
+   - Effort: small-medium.
+
+**Picks deferred (score ≥ 3 but lower priority):**
+
+- Tests for `agentic-executor.ts` (score 6) — template resolution / context injection / toNodeResult. Last meaningful god-node gap; deferred to keep this invocation atomic.
+
+**Signals consulted:** roadmap gaps, god-node coverage (graphify), prior decisions (both #1 and #2 completed — no de-dup needed), recent commits (last 24h = heavy test additions; weighted down to avoid piling more tests in the same areas).
+
+**Notes:** Roadmap M4 now fully green (3/3 metrics backed). The decisions log is starting to show a signal: picks rooted in roadmap metrics produce high-certainty wins (M4-2 and M4-3 both landed clean, no bugs surfaced). Graph-fragility picks are higher variance — they surface bugs (pick #1) but sometimes those bugs eat the time budget.
