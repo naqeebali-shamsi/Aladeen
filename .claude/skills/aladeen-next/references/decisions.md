@@ -15,7 +15,7 @@ only its `Status:` line — do not delete or reorder.
    - Acceptance: `src/engine/completion.test.ts` exists; mocks `child_process.spawn`; verifies CLAUDE_CONFIG.parseOutput handles the JSON shape we observed in run `c607e199` and the failure shape from a non-zero exit. Plus a small parseOutput test for codex/gemini configs.
    - Effort: medium
 
-2. **End-to-end test for `aladeen run --resume`** (score: 5) — `Status: suggested`
+2. **End-to-end test for `aladeen run --resume`** (score: 5) — `Status: completed (commit 3e97942)` — added 3 tests to `runner.test.ts`: (a) resume from a mid-flight state picks up at `currentNodeId` and does NOT re-execute completed nodes, verified via CountingStubExecutor asserting only `['b', 'c']` were called (not `['a', 'b', 'c']`); (b) `totalRetries` counter preserved across resume; (c) full disk round-trip — save → load via `StatePersistence` → `runner.resume()` → completed state persisted back. Roadmap M4 metric "at least one run can be replayed from persisted state + artifacts" now backed by code. No bugs surfaced — the resume path was correct as designed.
    - Roadmap M4: "at least one run can be replayed from persisted state + artifacts" — code exists in `src/cli.tsx:23`, `src/engine/runner.ts:resume()`, but never validated since the abandoned-status schema change.
    - Signals: roadmap metric without backing test, recent state.ts churn (1b90475) makes resume risk-prone
    - Acceptance: integration test that runs deterministic blueprint, kills it mid-flight, calls `runner.resume()`, asserts the run completes with all nodes at `completed`.
