@@ -160,6 +160,77 @@ describe('BlueprintRunner.resume — mid-flight state', () => {
   });
 });
 
+// ─── Pick #3: runPolicy metadata (roadmap M1) ───────────────────────────────
+
+const onePassBlueprint: Blueprint = {
+  id: 'policy-test',
+  name: 'single-node',
+  version: '1.0.0',
+  entryNodeId: 'x',
+  maxTotalRetries: 3,
+  maxDurationMs: 60_000,
+  nodes: [
+    { id: 'x', label: 'x', kind: 'deterministic', op: { type: 'shell', command: 'noop' } },
+  ],
+  edges: [],
+  defaultContext: { cwd: '.', env: {}, ruleFiles: [], allowedTools: [], store: {} },
+};
+
+function runnerWith(outcomes: Map<string, NodeResult>, runMode?: 'local-only' | 'hybrid' | 'cloud'): BlueprintRunner {
+  const runner = new BlueprintRunner(runMode ? { runMode } : {});
+  const stub = new StubExecutor(outcomes);
+  (runner as unknown as { deterministicExec: INodeExecutor }).deterministicExec = stub;
+  return runner;
+}
+
+describe('BlueprintRunner — runPolicy metadata on every run (roadmap M1)', () => {
+  it('explicit runMode: "local-only" → mode=local-only, cloudFallbackAllowed=false', async () => {
+    const runner = runnerWith(new Map([['x', okResult]]), 'local-only');
+    const final = await runner.run(onePassBlueprint);
+
+    expect(final.status).toBe('completed');
+    expect(final.runPolicy).toBeDefined();
+    expect(final.runPolicy!.mode).toBe('local-only');
+    expect(final.runPolicy!.cloudFallbackAllowed).toBe(false);
+  });
+
+  it('default (no runMode) still populates runPolicy with the safe default', async () => {
+    const runner = runnerWith(new Map([['x', okResult]]));
+    const final = await runner.run(onePassBlueprint);
+
+    expect(final.runPolicy).toBeDefined();
+    expect(final.runPolicy!.mode).toBe('local-only');
+    expect(final.runPolicy!.cloudFallbackAllowed).toBe(false);
+  });
+
+  it('runMode: "hybrid" sets cloudFallbackAllowed=true', async () => {
+    const runner = runnerWith(new Map([['x', okResult]]), 'hybrid');
+    const final = await runner.run(onePassBlueprint);
+
+    expect(final.runPolicy!.mode).toBe('hybrid');
+    expect(final.runPolicy!.cloudFallbackAllowed).toBe(true);
+  });
+
+  it('carries blueprint-level budgets (maxRunDurationMs, maxTotalRetries) into runPolicy', async () => {
+    const runner = runnerWith(new Map([['x', okResult]]), 'local-only');
+    const final = await runner.run(onePassBlueprint);
+
+    expect(final.runPolicy!.maxRunDurationMs).toBe(60_000);
+    expect(final.runPolicy!.maxTotalRetries).toBe(3);
+  });
+
+  it('escalated run still carries runPolicy (metric applies to ALL runs, not just completed)', async () => {
+    // Reuse the loopBlueprint pattern — lint keeps failing, fix keeps succeeding,
+    // totalRetries exhausts → escalated.
+    const runner = runnerWith(new Map([['lint', failResult], ['fix', okResult]]), 'local-only');
+    const final = await runner.run(loopBlueprint);
+
+    expect(final.status).toBe('escalated');
+    expect(final.runPolicy).toBeDefined();
+    expect(final.runPolicy!.mode).toBe('local-only');
+  });
+});
+
 describe('BlueprintRunner.resume — disk round-trip (roadmap M4)', () => {
   let tmp: string;
   let persistence: StatePersistence;
