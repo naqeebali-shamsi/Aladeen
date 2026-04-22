@@ -72,3 +72,25 @@ only its `Status:` line — do not delete or reorder.
 **Signals consulted:** prior decisions (deferred pick #2 still open), god-node coverage (graphify), roadmap milestones M1–M5, open postrun patterns, recent commits (last 48h = mostly test/docs; weighted accordingly), source-vs-test file map.
 
 **Notes:** Roadmap M1, M2, M3, M4 all turn out to be code-backed — the remaining gaps are *test-backed* not *code-backed*. That's a meaningful shift in the signal landscape and argues for raising the weight of "acceptance metric has code but no asserting test" relative to "acceptance metric unimplemented." Not adjusting the SKILL.md weights yet — one observation isn't enough; flagging for the next invocation to confirm.
+
+---
+
+## 2026-04-22 — 1 pick (fourth invocation)
+
+**Picks:**
+
+1. **Structural tests for `createImplementFeatureLocalBlueprint` (roadmap M2)** (score: 4) — `Status: suggested`
+   - Rationale: M2 has two unasserted acceptance metrics — "Blueprint validates with `validateBlueprint`" and "Remove default remote push from local-only flow." Code exists (`src/blueprints/implement-feature.ts:13`) and is wired into the `run-local-feature` CLI (`src/cli.tsx:74,84`), but zero tests reference `createImplementFeatureLocalBlueprint`. Same signal shape as invocation #3 pick #2 (M1 runPolicy) — which landed clean and caught zero bugs; supports the "code-backed but test-unasserted" hypothesis flagged in invocation #3 notes.
+   - Evidence: grep `createImplementFeatureLocalBlueprint|implement-feature-local` on `**/*.test.ts` → 0 matches. Factory produces 14 nodes + 16 edges; docstring at `implement-feature.ts:6-8` lists a `commit -> push -> cleanup` flow, but no `push` node exists (good — matches M2) — the drift is latent and only a test would pin it.
+   - Acceptance: `src/blueprints/implement-feature.test.ts` with ≥4 assertions — (a) `validateBlueprint(bp).valid === true`; (b) deterministic gate nodes `{typecheck, lint, test, verify-branch}` all present; (c) no node has `op.type === 'git' && op.action === 'push'` (enforces the M2 "no remote push" metric); (d) `maxDurationMs` and `maxTotalRetries` set on the blueprint.
+   - Effort: small (~20min).
+
+**Picks considered but dropped:**
+
+- Tests for `LocalContextAssembler.assemble()` (score: 3) — touches `git status`/`git diff` + filesystem + env-var, real logic but moderate value; not essential to any acceptance metric. Hold for a future invocation.
+- Drift sample for `second-real-agentic-run-success` — still 1 observation in postrun; needs 2–3 more real agentic runs, each costs minutes + real Claude API calls. Cost > value in a session.
+- Tests for `src/adapters/{base,claude,codex,gemini}.ts` — PTY shims for the interactive TUI path, not the agentic hot path (which is `completion.ts`, already tested). Score < 3.
+
+**Signals consulted:** prior decisions (both picks from invocation #3 completed — no de-dup needed), roadmap milestones, source-vs-test file map, open postrun patterns (1, unchanged), recent commits (last 72h = only test additions — weighted down to avoid piling on).
+
+**Notes:** Second consecutive observation of "M-metric has code, no test asserts it." After pick #1 lands cleanly, this will be 2/2 clean wins from this signal — enough to consider bumping its weight in SKILL.md during invocation #5.
