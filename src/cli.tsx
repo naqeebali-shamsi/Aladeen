@@ -9,6 +9,7 @@ import { StatePersistence } from './engine/state.js';
 import AladeenApp from './tui/App.js';
 import { createImplementFeatureLocalBlueprint } from './blueprints/index.js';
 import { createLocalFirstRunnerOptions } from './engine/local-runner-options.js';
+import { bucketFailures } from './engine/failure-buckets.js';
 
 const program = new Command();
 
@@ -185,6 +186,32 @@ program
       console.log(`    Completed: ${state.completedAt ?? 'in progress'}`);
       if (state.escalationReason) {
         console.log(`    Reason:    ${state.escalationReason.slice(0, 120)}`);
+      }
+      console.log('');
+    }
+  });
+
+program
+  .command('failure-patterns')
+  .description('Group failed/escalated/abandoned runs by (nodeId, outcome) to surface dominant failure modes')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .action(async (opts: { repoRoot: string }) => {
+    const persistence = new StatePersistence(opts.repoRoot);
+    const runs = await persistence.list();
+    const buckets = bucketFailures(runs);
+
+    if (buckets.length === 0) {
+      console.log(runs.length === 0 ? 'No saved runs found.' : `All ${runs.length} run(s) completed cleanly — no failure patterns.`);
+      return;
+    }
+
+    console.log(`Found ${buckets.length} failure pattern(s) across ${runs.length} run(s):\n`);
+    for (const b of buckets) {
+      const location = b.nodeId === '__run__' ? 'run-level' : `node "${b.nodeId}"`;
+      console.log(`  [${b.count}×] ${b.outcome} at ${location}`);
+      console.log(`    Sample runs: ${b.sampleRunIds.join(', ')}`);
+      if (b.sampleErrors.length > 0) {
+        console.log(`    Sample error: ${b.sampleErrors[0]}`);
       }
       console.log('');
     }

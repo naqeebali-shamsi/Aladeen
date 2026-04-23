@@ -102,4 +102,32 @@ describe('CLI smoke — roadmap M3 "CLI commands execute without crashing on val
     const r = await runCli(['inspect-run', 'does-not-exist', '--repo-root', repoRoot]);
     expect(r.code).not.toBe(0);
   });
+
+  it('failure-patterns surfaces an abandoned run as a run-level bucket', async () => {
+    await saveRun({
+      runId: 'orphan-1',
+      status: 'abandoned',
+      escalationReason: 'Marked abandoned by sweep: status=running with no completedAt',
+    });
+
+    const r = await runCli(['failure-patterns', '--repo-root', repoRoot]);
+
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/\[1×\] abandoned at run-level/);
+    expect(r.stdout).toContain('orphan-1');
+    expect(r.stdout).toContain('Marked abandoned by sweep');
+  });
+
+  it('failure-patterns reports cleanly when all runs completed', async () => {
+    await saveRun({ runId: 'clean-1', status: 'completed' });
+    const r = await runCli(['failure-patterns', '--repo-root', repoRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('completed cleanly');
+  });
+
+  it('failure-patterns reports empty when no runs exist', async () => {
+    const r = await runCli(['failure-patterns', '--repo-root', repoRoot]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('No saved runs found.');
+  });
 });
