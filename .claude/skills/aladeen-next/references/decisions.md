@@ -94,3 +94,34 @@ only its `Status:` line — do not delete or reorder.
 **Signals consulted:** prior decisions (both picks from invocation #3 completed — no de-dup needed), roadmap milestones, source-vs-test file map, open postrun patterns (1, unchanged), recent commits (last 72h = only test additions — weighted down to avoid piling on).
 
 **Notes:** Second consecutive observation of "M-metric has code, no test asserts it." After pick #1 lands cleanly, this will be 2/2 clean wins from this signal — enough to consider bumping its weight in SKILL.md during invocation #5.
+
+---
+
+## 2026-04-23 — 2 picks (fifth invocation)
+
+**Picks:**
+
+1. **Wire `bucketFailures` into a CLI surface** (score: 4 by analogy) — `Status: suggested`
+   - Rationale: Brand-new finding this invocation. `src/engine/failure-buckets.ts` exports `bucketFailures()` with full test coverage (6 tests in `failure-buckets.test.ts`), but grep on `src/**/*.ts` (excluding tests) shows ZERO callers — `cli.tsx`, `runner.ts`, `state.ts` all ignore it. The function was built to back M4 metric "Failure reasons are structured enough to bucket by gate/outcome" — and it does, in a strict reading — but the buckets never reach the developer. M4 is technically green; the metric is hollow in practice.
+   - Evidence: grep `bucketFailures` `src/**/*.ts` → 2 hits (the file + its test), no callers. Live data: 8 persisted runs, 2 of which are `abandoned` orphans (`690cbbfe`, `b9428fa6`) — the bucket function would surface them as the dominant pattern but no command does.
+   - Acceptance: new CLI command `aladeen failure-patterns` (or `list-runs --buckets`) loads `.aladeen/runs/*.json`, calls `bucketFailures()`, prints buckets sorted by count with sample run IDs and truncated error snippets. New subprocess test in `src/cli.test.ts` asserts exit 0 and that the abandoned-bucket appears.
+   - Effort: small (~30min).
+   - Caveat: doesn't strictly fit any row in the weight table — closest analog is "hot code area without surface" rather than "without tests." Surfacing as a pick because the practical leverage is real (turns dead utility into developer-facing intelligence) even if the rubric doesn't see it.
+
+2. **TUI retry-counter test (M3 metric: "TUI shows retry counters and current node status transitions")** (score: 4) — `Status: suggested` (alternative)
+   - Rationale: Last unasserted M3 acceptance metric. Same pattern as M1/M2/M3 picks that all landed clean (3/3). Tests the BlueprintView component renders retry counts + node status from a synthetic ExecutionState.
+   - Evidence: `src/tui/BlueprintView.tsx` exists and is wired into `src/tui/App.tsx`, but grep on `**/*.test.tsx` and `**/*.test.ts` for `BlueprintView` → 0 matches. M3 metric explicitly references TUI behavior.
+   - Acceptance: `src/tui/BlueprintView.test.tsx` using `ink-testing-library` (new devDep ~5MB), renders the component with a state showing one node at `attempts: 3, status: 'running'`, asserts the rendered frame contains the count and status string.
+   - Effort: medium (~60min — includes ink-testing-library setup).
+
+**Picks considered but dropped:**
+
+- Drift sample for `second-real-agentic-run-success` — still 1 obs, unchanged in postrun, real-run cost unchanged. Hold.
+- Tests for `LocalContextAssembler.assemble()` — dropped twice now; if it surfaces a third time as a candidate, take it; otherwise it's not pulling its weight as a signal.
+- M5 stabilization (lint + docs) — not really test-shaped; lint is a CI concern, docs is wordsmithing.
+
+**Signals consulted:** prior decisions (all 5 prior picks completed), source-vs-test file map, source-vs-caller map (new this round — surfaced the bucketFailures orphan), open postrun patterns (1, unchanged), recent commits (last 24h = the M3 pick), roadmap milestones M3 (1 metric still unasserted) + M4 (technically met but hollow).
+
+**Notes:** Two evolutions to flag:
+1. **New signal class discovered**: "Tested utility with no production callers" — found bucketFailures unused. Not in the weights table. If this recurs, propose a row at weight 3 ("hollow metric / dead utility").
+2. **Weight-bump candidate ready**: "M-metric has code but no asserting test" is now 3/3 clean wins (M1 runPolicy, M2 blueprint structure, M3 CLI smoke). The current rubric folds this under "Roadmap milestone metric without code backing" (weight 4) but the two are genuinely distinct. Proposing add a new row "Roadmap metric has code but no asserting test" at weight 4 to SKILL.md. Awaiting user approval before editing the rubric mid-flight.
