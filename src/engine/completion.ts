@@ -11,6 +11,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { resolveBinary } from './binary-resolver.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -387,7 +388,7 @@ export class CompletionDetector {
       let stderr = '';
       let timedOut = false;
 
-      const proc = spawn(config.binary, args, {
+      const proc = spawn(resolveBinary(config.binary), args, {
         cwd: options.cwd,
         env: options.env ? { ...process.env, ...options.env } : process.env,
         signal: this.abortController!.signal,
