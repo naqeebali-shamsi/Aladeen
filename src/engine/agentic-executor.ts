@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type {
   AgenticNode,
   BlueprintContext,
@@ -13,9 +15,29 @@ import {
   type HeadlessResult,
 } from './completion.js';
 
+const execFileAsync = promisify(execFile);
+
+/**
+ * Default file-change check: returns true if `git status --short` in `cwd`
+ * reports any modifications. Used to enforce node.requiresFileChanges so a
+ * chatty/refusing agent can't silently pass as "completed."
+ */
+async function defaultHasUncommittedChanges(cwd: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync('git', ['status', '--short'], { cwd });
+    return stdout.trim().length > 0;
+  } catch {
+    // If git isn't available or cwd isn't a repo, be conservative: assume the
+    // agent did something. Better to pass through than block legitimate work.
+    return true;
+  }
+}
+
 interface AgenticExecutorOptions {
   contextAssembler?: ContextAssembler;
   modelRouter?: ModelRouter;
+  /** Test seam — override the git-status probe used for requiresFileChanges. */
+  hasUncommittedChanges?: (cwd: string) => Promise<boolean>;
 }
 
 /**
@@ -29,10 +51,12 @@ export class AgenticExecutor implements INodeExecutor {
   private detector = new CompletionDetector();
   private readonly contextAssembler?: ContextAssembler;
   private readonly modelRouter?: ModelRouter;
+  private readonly hasUncommittedChanges: (cwd: string) => Promise<boolean>;
 
   constructor(options: AgenticExecutorOptions = {}) {
     this.contextAssembler = options.contextAssembler;
     this.modelRouter = options.modelRouter;
+    this.hasUncommittedChanges = options.hasUncommittedChanges ?? defaultHasUncommittedChanges;
   }
 
   async execute(node: BlueprintNode, context: BlueprintContext): Promise<NodeResult> {
@@ -78,8 +102,29 @@ export class AgenticExecutor implements INodeExecutor {
     };
 
     const result = await this.detector.execute(node.adapterId, prompt, options);
-    const durationMs = performance.now() - start;
 
+    // requiresFileChanges: enforce that "spawn exit 0" implies "files changed."
+    // Without this, agents that ask clarifying questions or refuse to act get
+    // marked successful — silent hallucination of completion.
+    if (result.success && node.requiresFileChanges) {
+      const changed = await this.hasUncommittedChanges(context.cwd);
+      if (!changed) {
+        const durationMs = performance.now() - start;
+        return {
+          outcome: 'retry',
+          output: {
+            response: result.response,
+            sessionId: result.sessionId,
+            usage: result.usage,
+          },
+          error: `Agent reported success but no files changed in ${context.cwd}. Likely refused, asked for clarification, or ran without write tools.`,
+          summary: `Agentic node "${node.label}" produced no file changes`,
+          durationMs,
+        };
+      }
+    }
+
+    const durationMs = performance.now() - start;
     return this.toNodeResult(result, node, durationMs);
   }
 

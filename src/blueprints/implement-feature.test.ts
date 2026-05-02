@@ -80,4 +80,20 @@ describe('createImplementFeatureLocalBlueprint — roadmap M2 structural contrac
     expect(shellOp('typecheck')).toMatchObject({ command: 'node', args: ['--check', 'src/index.js'] });
     expect(shellOp('bootstrap-deps')).toMatchObject({ command: 'pnpm', args: ['install', '--frozen-lockfile'] });
   });
+
+  it('grants write tools and requires file changes on every agentic node (D1+D2 from Audex dogfood)', () => {
+    // Surfaced by Audex dogfood: without explicit allowedTools, claude -p
+    // ran read-only and chatted back instead of writing files. Without
+    // requiresFileChanges, "process exit 0" was treated as "work done."
+    const agenticNodes = bp.nodes.filter((n) => n.kind === 'agentic');
+    expect(agenticNodes.map((n) => n.id).sort()).toEqual(['fix-lint', 'fix-tests', 'implement']);
+
+    for (const node of agenticNodes) {
+      if (node.kind !== 'agentic') throw new Error('unreachable');
+      expect(node.requiresFileChanges, `${node.id} must require file changes`).toBe(true);
+      expect(node.contextOverrides?.allowedTools, `${node.id} must declare write tools`)
+        .toContain('Write');
+      expect(node.contextOverrides?.allowedTools).toContain('Edit');
+    }
+  });
 });

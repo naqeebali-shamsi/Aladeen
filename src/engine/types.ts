@@ -91,6 +91,14 @@ export interface AgenticNode extends NodeBase {
   maxRetries: number;
   /** Optional: a function name or inline check to evaluate the agent's output */
   evaluator?: string;
+  /**
+   * If true, the executor verifies the agent actually changed files (via
+   * `git status --short` in context.cwd) after a successful spawn. Without
+   * this, a chatty agent that asks for clarification or refuses to act will
+   * be incorrectly marked successful — the contract becomes "process exited
+   * 0" rather than "the requested change happened on disk."
+   */
+  requiresFileChanges?: boolean;
 }
 
 export type BlueprintNode = DeterministicNode | AgenticNode;
@@ -120,6 +128,7 @@ export const AgenticNodeSchema = NodeBaseSchema.extend({
   prompt: z.string(),
   maxRetries: z.number().int().min(0).default(2),
   evaluator: z.string().optional(),
+  requiresFileChanges: z.boolean().optional(),
 });
 
 export const BlueprintNodeSchema = z.discriminatedUnion('kind', [

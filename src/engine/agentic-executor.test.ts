@@ -142,3 +142,75 @@ describe('AgenticExecutor.execute → toNodeResult', () => {
     );
   });
 });
+
+describe('AgenticExecutor — requiresFileChanges (Audex dogfood D1 fix)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('downgrades success → retry when no files changed', async () => {
+    vi.spyOn(CompletionDetector.prototype, 'execute').mockResolvedValue({
+      success: true,
+      response: 'Sure, what would you like me to do?',
+      exitCode: 0,
+    });
+
+    const exec = new AgenticExecutor({
+      hasUncommittedChanges: async () => false,
+    });
+
+    const result = await exec.execute(node({ requiresFileChanges: true }), ctx);
+
+    expect(result.outcome).toBe('retry');
+    expect(result.error).toMatch(/no files changed/);
+    expect(result.summary).toMatch(/produced no file changes/);
+  });
+
+  it('preserves success when files DID change', async () => {
+    vi.spyOn(CompletionDetector.prototype, 'execute').mockResolvedValue({
+      success: true,
+      response: 'Created src/foo.ts',
+      exitCode: 0,
+    });
+
+    const exec = new AgenticExecutor({
+      hasUncommittedChanges: async () => true,
+    });
+
+    const result = await exec.execute(node({ requiresFileChanges: true }), ctx);
+
+    expect(result.outcome).toBe('success');
+    expect(result.error).toBeUndefined();
+  });
+
+  it('skips the file-change check when requiresFileChanges is undefined/false', async () => {
+    vi.spyOn(CompletionDetector.prototype, 'execute').mockResolvedValue({
+      success: true,
+      response: 'ok',
+      exitCode: 0,
+    });
+
+    const probe = vi.fn(async () => false);
+    const exec = new AgenticExecutor({ hasUncommittedChanges: probe });
+
+    const result = await exec.execute(node({ requiresFileChanges: false }), ctx);
+
+    expect(result.outcome).toBe('success');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('does NOT run the file-change check on a failed spawn (no false positives)', async () => {
+    vi.spyOn(CompletionDetector.prototype, 'execute').mockResolvedValue({
+      success: false,
+      response: '',
+      exitCode: 1,
+      error: 'agent exploded',
+    });
+
+    const probe = vi.fn(async () => false);
+    const exec = new AgenticExecutor({ hasUncommittedChanges: probe });
+
+    const result = await exec.execute(node({ requiresFileChanges: true }), ctx);
+
+    expect(result.outcome).toBe('retry');
+    expect(probe).not.toHaveBeenCalled();
+  });
+});
