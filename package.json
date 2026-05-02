@@ -14,8 +14,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
+    "cross-spawn": "^7.0.6",
     "ink": "^6.8.0",
     "node-pty": "^1.1.0",
     "react": "^19.2.4",

@@ -10,7 +10,8 @@
  * AdapterCapabilities.headlessMode.
  */
 
-import { spawn, ChildProcess } from 'child_process';
+import { type ChildProcess } from 'child_process';
+import crossSpawn from 'cross-spawn';
 import { resolveBinary } from './binary-resolver.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -388,12 +389,27 @@ export class CompletionDetector {
       let stderr = '';
       let timedOut = false;
 
-      const proc = spawn(resolveBinary(config.binary), args, {
-        cwd: options.cwd,
-        env: options.env ? { ...process.env, ...options.env } : process.env,
-        signal: this.abortController!.signal,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      let proc: ChildProcess;
+      try {
+        proc = crossSpawn(resolveBinary(config.binary), args, {
+          cwd: options.cwd,
+          env: options.env ? { ...process.env, ...options.env } : process.env,
+          signal: this.abortController!.signal,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (err) {
+        // spawn can throw synchronously (Node 20.12+ rejects .cmd/.bat
+        // without shell:true via CVE-2024-27980 patch — cross-spawn handles
+        // this, but the catch is defense-in-depth so any spawn-time failure
+        // surfaces as a HeadlessResult instead of corrupting the run state).
+        resolve({
+          success: false,
+          response: '',
+          exitCode: -1,
+          error: `Failed to spawn ${config.binary}: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        return;
+      }
 
       this.activeProcess = proc;
 
