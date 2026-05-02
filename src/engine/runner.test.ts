@@ -183,6 +183,77 @@ function runnerWith(outcomes: Map<string, NodeResult>, runMode?: 'local-only' | 
   return runner;
 }
 
+describe('BlueprintRunner — retry must NOT follow the default edge (Bug F: opencode dogfood)', () => {
+  it('an agentic retry re-executes the same node when there is no on:retry edge — default edge does not absorb retry', async () => {
+    // Surfaced by dogfood-audex-2-opencode: implement returned retry (file-changes
+    // verifier downgraded a chatty agent), but the runner walked the default
+    // implement→typecheck edge as if implement succeeded — defeating the verifier.
+    const bp: Blueprint = {
+      id: 'agentic-retry-test',
+      name: 'A (agentic) → B',
+      version: '1.0.0',
+      entryNodeId: 'a',
+      maxTotalRetries: 2,
+      nodes: [
+        // maxRetries:2 lets retry happen at least once before exhausting
+        { id: 'a', label: 'a', kind: 'agentic', adapterId: 'claude', prompt: '', maxRetries: 2 },
+        { id: 'b', label: 'b', kind: 'deterministic', op: { type: 'shell', command: 'noop' } },
+      ],
+      // ONLY a default edge from a → b (no on:retry edge defined)
+      edges: [{ from: 'a', to: 'b' }],
+      defaultContext: { cwd: '.', env: {}, ruleFiles: [], allowedTools: [], store: {} },
+    };
+
+    const runner = new BlueprintRunner();
+    const stub = new CountingStubExecutor(new Map([
+      ['a', { outcome: 'retry', output: {}, durationMs: 1, error: 'no files changed' }],
+      ['b', okResult],
+    ]));
+    (runner as unknown as { agenticExec: INodeExecutor }).agenticExec = stub;
+
+    const final = await runner.run(bp);
+
+    // 'b' must NOT have been called via the default edge from 'a' on retry.
+    expect(stub.calls).not.toContain('b');
+    // The run should have escalated/failed without ever advancing to 'b'.
+    expect(['escalated', 'failed']).toContain(final.status);
+    // 'a' should have been re-executed at least once before exhaustion.
+    expect(final.nodeExecutions['a']!.attempts).toBeGreaterThanOrEqual(2);
+  });
+
+  it('an explicit on:retry edge IS still honored', async () => {
+    const bp: Blueprint = {
+      id: 'explicit-retry',
+      name: 'A → B (only on retry)',
+      version: '1.0.0',
+      entryNodeId: 'a',
+      nodes: [
+        { id: 'a', label: 'a', kind: 'agentic', adapterId: 'claude', prompt: '', maxRetries: 2 },
+        { id: 'b', label: 'b', kind: 'deterministic', op: { type: 'shell', command: 'noop' } },
+      ],
+      edges: [
+        { from: 'a', to: 'b', on: 'retry' },
+        { from: 'b', to: 'a' }, // loop back so we don't terminate immediately
+      ],
+      defaultContext: { cwd: '.', env: {}, ruleFiles: [], allowedTools: [], store: {} },
+      maxTotalRetries: 1,
+    };
+
+    const runner = new BlueprintRunner();
+    const stub = new CountingStubExecutor(new Map([
+      ['a', { outcome: 'retry', output: {}, durationMs: 1 }],
+      ['b', okResult],
+    ]));
+    (runner as unknown as { agenticExec: INodeExecutor }).agenticExec = stub;
+    (runner as unknown as { deterministicExec: INodeExecutor }).deterministicExec = stub;
+
+    await runner.run(bp);
+
+    // Explicit on:retry edge fired, so 'b' was reached.
+    expect(stub.calls).toContain('b');
+  });
+});
+
 describe('BlueprintRunner — runPolicy metadata on every run (roadmap M1)', () => {
   it('explicit runMode: "local-only" → mode=local-only, cloudFallbackAllowed=false', async () => {
     const runner = runnerWith(new Map([['x', okResult]]), 'local-only');

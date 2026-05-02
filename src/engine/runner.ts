@@ -369,6 +369,16 @@ export class BlueprintRunner implements IBlueprintRunner {
   /**
    * Find the next node from an edge list.
    * Priority: exact outcome match > default (undefined on) > null.
+   *
+   * IMPORTANT: default edges only apply to `success` and `failure`. A `retry`
+   * outcome MUST have an explicit `on: 'retry'` edge to advance — otherwise
+   * the same node re-executes (handled by handleRetry's fall-through).
+   * Without this exclusion, a retry silently walks the success path,
+   * defeating verifiers like AgenticNode.requiresFileChanges (the
+   * verifier downgrades success → retry to mean "no file changes — try
+   * again", but if retry follows the default edge, the run advances
+   * regardless and the gate is bypassed). Surfaced by the second
+   * Audex/opencode dogfood.
    */
   private resolveNext(
     fromId: string,
@@ -378,6 +388,7 @@ export class BlueprintRunner implements IBlueprintRunner {
     const outgoing = edges.filter((e) => e.from === fromId);
     const exact = outgoing.find((e) => e.on === outcome);
     if (exact) return exact.to;
+    if (outcome === 'retry') return null;
     const def = outgoing.find((e) => e.on === undefined);
     if (def) return def.to;
     return null;
