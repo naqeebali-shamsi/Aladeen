@@ -47,4 +47,37 @@ describe('createImplementFeatureLocalBlueprint — roadmap M2 structural contrac
     expect(bp.edges).toContainEqual(expect.objectContaining({ from: 'fix-lint', to: 'lint' }));
     expect(bp.edges).toContainEqual(expect.objectContaining({ from: 'fix-tests', to: 'test' }));
   });
+
+  it('threads lint/test/typecheck/install command overrides into the right nodes', () => {
+    // Surfaced by Audex dogfood: typecheck was hardcoded to tsc and unusable
+    // for non-TS projects. Verify all four overrides land on their nodes.
+    const custom = createImplementFeatureLocalBlueprint({
+      taskId: 'override-check',
+      prompt: 'noop',
+      adapterId: 'claude',
+      repoRoot: '/tmp/repo',
+      lintCommand: 'eslint',
+      lintArgs: ['src/**/*.js'],
+      testCommand: 'vitest',
+      testArgs: ['run'],
+      typecheckCommand: 'node',
+      typecheckArgs: ['--check', 'src/index.js'],
+      installCommand: 'pnpm',
+      installArgs: ['install', '--frozen-lockfile'],
+    });
+
+    const byId = new Map(custom.nodes.map((n) => [n.id, n]));
+    const shellOp = (id: string) => {
+      const n = byId.get(id);
+      if (!n || n.kind !== 'deterministic' || n.op.type !== 'shell') {
+        throw new Error(`expected shell node: ${id}`);
+      }
+      return n.op;
+    };
+
+    expect(shellOp('lint')).toMatchObject({ command: 'eslint', args: ['src/**/*.js'] });
+    expect(shellOp('test')).toMatchObject({ command: 'vitest', args: ['run'] });
+    expect(shellOp('typecheck')).toMatchObject({ command: 'node', args: ['--check', 'src/index.js'] });
+    expect(shellOp('bootstrap-deps')).toMatchObject({ command: 'pnpm', args: ['install', '--frozen-lockfile'] });
+  });
 });

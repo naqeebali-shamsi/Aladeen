@@ -21,6 +21,8 @@ export function createImplementFeatureLocalBlueprint(params: {
   testArgs?: string[];
   lintCommand?: string;
   lintArgs?: string[];
+  typecheckCommand?: string;
+  typecheckArgs?: string[];
   /** Install CLI in worktree before gates (default: npm install). */
   installCommand?: string;
   installArgs?: string[];
@@ -36,6 +38,8 @@ export function createImplementFeatureLocalBlueprint(params: {
     testArgs = ['node_modules/typescript/lib/tsc.js', '--noEmit'],
     lintCommand = 'node',
     lintArgs = ['node_modules/typescript/lib/tsc.js', '--noEmit'],
+    typecheckCommand = 'node',
+    typecheckArgs = ['node_modules/typescript/lib/tsc.js', '--noEmit'],
     installCommand = 'npm',
     installArgs = ['install', '--no-audit', '--no-fund'],
   } = params;
@@ -116,8 +120,8 @@ export function createImplementFeatureLocalBlueprint(params: {
         kind: 'deterministic' as const,
         op: {
           type: 'shell' as const,
-          command: 'node',
-          args: ['node_modules/typescript/lib/tsc.js', '--noEmit'],
+          command: typecheckCommand,
+          args: typecheckArgs,
         },
       },
 
