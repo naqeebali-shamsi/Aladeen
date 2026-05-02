@@ -299,6 +299,44 @@ export const GEMINI_CONFIG: HeadlessConfig = {
   },
 };
 
+/**
+ * SST opencode adapter — universal agentic CLI that handles its own tool loop
+ * (Read/Write/Edit/Bash + MCP) and supports any provider via `provider/model`
+ * format (anthropic, openai, ollama, openrouter, etc).
+ *
+ * Picks model from env var `OPENCODE_MODEL` (e.g. `ollama/qwen2.5-coder:14b`)
+ * or falls back to a sensible Anthropic default. Always passes
+ * `--dangerously-skip-permissions` so the agent runs unattended.
+ *
+ * Surfaced by the Audex dogfood: this is the path to multi-provider support
+ * (especially local-first via Ollama) without building an in-process agent.
+ */
+export const OPENCODE_CONFIG: HeadlessConfig = {
+  binary: 'opencode',
+  buildArgs(prompt: string, _options: HeadlessOptions): string[] {
+    const model = process.env['OPENCODE_MODEL'] ?? 'anthropic/claude-sonnet-4-5';
+    // `run` takes the prompt as a positional message; --dangerously-skip-permissions
+    // is required for unattended file writes (matches the same flag we already
+    // use implicitly via Claude's --allowedTools).
+    return ['run', prompt, '--model', model, '--dangerously-skip-permissions'];
+  },
+  parseOutput(stdout: string, exitCode: number): HeadlessResult {
+    if (exitCode !== 0) {
+      return {
+        success: false,
+        response: '',
+        exitCode,
+        error: `opencode exited with code ${exitCode}: ${stdout.slice(0, 500)}`,
+      };
+    }
+    // opencode's default output mixes a progress banner with the model's text.
+    // The requiresFileChanges verifier in AgenticExecutor is the real success
+    // gate; we just preserve the response text so logs/postrun show what the
+    // agent said. ANSI escape sequences are common — the consumer can strip if needed.
+    return { success: true, response: stdout.trim(), exitCode };
+  },
+};
+
 export const LOCAL_OLLAMA_CONFIG: HeadlessConfig = {
   binary: 'ollama',
   buildArgs(prompt: string, _options: HeadlessOptions): string[] {
@@ -342,6 +380,7 @@ export const HEADLESS_CONFIGS: Record<string, HeadlessConfig> = {
   claude: CLAUDE_CONFIG,
   codex: CODEX_CONFIG,
   gemini: GEMINI_CONFIG,
+  opencode: OPENCODE_CONFIG,
   'local-ollama': LOCAL_OLLAMA_CONFIG,
   'local-llama-cpp': LOCAL_LLAMA_CPP_CONFIG,
 };
