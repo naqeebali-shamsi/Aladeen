@@ -126,7 +126,11 @@ export class DeterministicExecutor implements INodeExecutor {
       case 'worktree_add':
         return ['worktree', 'add', '-b', params['branch'] ?? '', params['path'] ?? '', params['base'] ?? 'HEAD'];
       case 'worktree_remove':
-        return ['worktree', 'remove', params['path'] ?? ''];
+        // --force so the remove succeeds even when the worktree contains
+        // untracked artifacts (e.g. .aladeen-pr-ready.txt, log dirs).
+        // Surfaced by the Audex dogfood: cleanup failed at the last step
+        // because git refused to remove a "modified or untracked" worktree.
+        return ['worktree', 'remove', '--force', params['path'] ?? ''];
       default:
         return [action];
     }
