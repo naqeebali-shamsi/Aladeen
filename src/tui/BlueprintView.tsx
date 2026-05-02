@@ -62,6 +62,22 @@ const BlueprintView: React.FC<BlueprintViewProps> = ({ blueprint, resumeState, r
     execute();
   }, [blueprint, resumeState, repoRoot, runnerOptions, addLog]);
 
+  return <BlueprintFrame blueprint={blueprint} state={state} logs={logs} done={done} />;
+};
+
+interface BlueprintFrameProps {
+  blueprint: Blueprint;
+  state: ExecutionState | null;
+  logs: string[];
+  done: boolean;
+}
+
+/**
+ * Pure presentational view of a blueprint run. Exported for unit tests so the
+ * visual output (retry counters, node status, gate failures) can be exercised
+ * with synthetic ExecutionState — no real runner required.
+ */
+export const BlueprintFrame: React.FC<BlueprintFrameProps> = ({ blueprint, state, logs, done }) => {
   const nodeCount = blueprint.nodes.length;
   const completedCount = state
     ? Object.values(state.nodeExecutions).filter((e) => e.status === 'completed').length
