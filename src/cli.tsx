@@ -7,9 +7,11 @@ import { BlueprintSchema } from './engine/types.js';
 import type { Blueprint, ExecutionState } from './engine/types.js';
 import { StatePersistence } from './engine/state.js';
 import AladeenApp from './tui/App.js';
+import SetupWizard from './tui/setup/SetupWizard.js';
 import { createImplementFeatureLocalBlueprint } from './blueprints/index.js';
 import { createLocalFirstRunnerOptions } from './engine/local-runner-options.js';
 import { bucketFailures } from './engine/failure-buckets.js';
+import { configExists, loadSecretsIntoEnv } from './config/index.js';
 
 const program = new Command();
 
@@ -19,13 +21,39 @@ program
   .description('Aladeen - Autonomous agentic orchestration');
 
 program
+  .command('setup')
+  .description('Interactive provider setup wizard (detect, auth, smoke-test, save config)')
+  .option('--scope <scope>', 'Where to save config: global or project', 'global')
+  .option('--repo-root <path>', 'Repository root for project-scoped config', process.cwd())
+  .action(async (opts: { scope: string; repoRoot: string }) => {
+    if (opts.scope !== 'global' && opts.scope !== 'project') {
+      console.error(`Invalid --scope "${opts.scope}". Use "global" or "project".`);
+      process.exit(1);
+    }
+    console.clear();
+    render(<SetupWizard scope={opts.scope as 'global' | 'project'} repoRoot={opts.repoRoot} />);
+  });
+
+program
   .command('run <blueprint>')
   .description('Load, validate, and execute a blueprint JSON file')
   .option('--resume <runId>', 'Resume a previously persisted run')
   .option('--repo-root <path>', 'Repository root for state persistence', process.cwd())
   .option('--local-first', 'Use local-first runner (context assembly, model router, heuristic evaluator)')
-  .action(async (blueprintPath: string, opts: { resume?: string; repoRoot: string; localFirst?: boolean }) => {
+  .option('--skip-setup-check', 'Skip the first-run setup-wizard prompt')
+  .action(async (
+    blueprintPath: string,
+    opts: { resume?: string; repoRoot: string; localFirst?: boolean; skipSetupCheck?: boolean },
+  ) => {
     try {
+      // First-run experience: if no config exists, hand off to setup wizard
+      await loadSecretsIntoEnv();
+      if (!opts.skipSetupCheck && !(await configExists(opts.repoRoot))) {
+        console.clear();
+        render(<SetupWizard repoRoot={opts.repoRoot} />);
+        return;
+      }
+
       // Load blueprint
       const resolved = path.resolve(blueprintPath);
       const raw = await readFile(resolved, 'utf-8');
