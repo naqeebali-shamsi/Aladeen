@@ -42,6 +42,42 @@ describe('computeDigest', () => {
     expect(d.patternFingerprint).toMatch(/^[a-f0-9]{16}$/);
   });
 
+  it('computes activeDurationMs by skipping idle gaps over 10 minutes', () => {
+    const events: SessionEvent[] = [
+      { kind: 'user_message', seq: 0, source: { kind: 'claude-code-jsonl', file: 'x' }, timestamp: '2026-05-19T10:00:00.000Z', text: 'a' },
+      { kind: 'agent_message', seq: 1, source: { kind: 'claude-code-jsonl', file: 'x' }, timestamp: '2026-05-19T10:00:30.000Z', text: 'b' },
+      // 1 hour gap (idle) → excluded
+      { kind: 'user_message', seq: 2, source: { kind: 'claude-code-jsonl', file: 'x' }, timestamp: '2026-05-19T11:00:30.000Z', text: 'c' },
+      { kind: 'agent_message', seq: 3, source: { kind: 'claude-code-jsonl', file: 'x' }, timestamp: '2026-05-19T11:01:00.000Z', text: 'd' },
+    ];
+    const d = computeDigest(trace(events, {
+      startedAt: '2026-05-19T10:00:00.000Z',
+      endedAt: '2026-05-19T11:01:00.000Z',
+    }));
+    expect(d.durationMs).toBe(61 * 60 * 1000);            // wall-clock 61 min
+    expect(d.activeDurationMs).toBe(30_000 + 30_000);     // 30s + 30s, gap excluded
+  });
+
+  it('buckets failure-rate into none/low/mid/high in the fingerprint', () => {
+    const mkResults = (failRatio: number): SessionEvent[] => {
+      const out: SessionEvent[] = [];
+      for (let i = 0; i < 10; i++) {
+        out.push({
+          kind: 'tool_result', seq: i, source: { kind: 'claude-code-jsonl', file: 'x' },
+          callId: `c${i}`, ok: i / 10 >= failRatio,
+          errorClass: i / 10 < failRatio ? 'tool_error' : undefined,
+        });
+      }
+      return out;
+    };
+    const low = computeDigest(trace(mkResults(0.1), { outcome: 'errored' }));
+    const mid = computeDigest(trace(mkResults(0.4), { outcome: 'errored' }));
+    const high = computeDigest(trace(mkResults(0.8), { outcome: 'errored' }));
+    // All three should have different fingerprints because the bucket
+    // changes. (Same agentCli + outcome + top error class otherwise.)
+    expect(new Set([low.patternFingerprint, mid.patternFingerprint, high.patternFingerprint]).size).toBe(3);
+  });
+
   it('produces the same fingerprint for runs with the same shape', () => {
     const mkEvents = (): SessionEvent[] => [
       { kind: 'tool_result', seq: 0, source: { kind: 'claude-code-jsonl', file: 'x' }, callId: 'a', ok: false, errorClass: 'rate_limit' },

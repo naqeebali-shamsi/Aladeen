@@ -108,10 +108,15 @@ export function formatReport(digests: RunDigest[], opts: ReportOptions = {}): st
     lines.push('  (none match)');
   } else {
     for (const d of summary.slice(0, limit)) {
-      const dur = d.durationMs ? `${Math.round(d.durationMs / 1000)}s` : '—';
+      // Prefer active duration (excludes idle gaps). Fall back to wall-clock.
+      const dur = d.activeDurationMs != null
+        ? `${formatDuration(d.activeDurationMs)} active`
+        : d.durationMs != null
+          ? `${formatDuration(d.durationMs)} wall`
+          : '—';
       const fails = d.toolFailureCount > 0 ? ` toolFails=${d.toolFailureCount}` : '';
       const loops = d.editLoops.length > 0 ? ` editLoops=${d.editLoops.length}` : '';
-      lines.push(`  ${d.sessionId}  ${d.outcome.padEnd(11)}  ${dur.padStart(6)}${fails}${loops}`);
+      lines.push(`  ${d.sessionId}  ${d.outcome.padEnd(11)}  ${dur.padStart(14)}${fails}${loops}`);
     }
   }
 
@@ -133,4 +138,13 @@ function topEntries(map: Record<string, number>, n: number): Array<[string, numb
   return sortByCountDesc(map)
     .filter(([, count]) => count > 0)
     .slice(0, n);
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${(s % 60).toString().padStart(2, '0')}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h${m.toString().padStart(2, '0')}m`;
 }

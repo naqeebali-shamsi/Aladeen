@@ -227,7 +227,13 @@ export const RunDigestSchema = z.object({
   sessionId: z.string(),
   agentCliName: z.string(),
   outcome: z.enum(SESSION_OUTCOMES),
+  // Wall-clock span between first and last event timestamp. Includes idle
+  // gaps when the user resumed across days, so this is misleading for any
+  // session with breaks. Kept for reference; prefer activeDurationMs.
   durationMs: z.number().nonnegative().optional(),
+  // Sum of gaps between consecutive events where gap < IDLE_GAP_MS (10 min).
+  // Excludes idle periods. Closer to "actual time the agent was working."
+  activeDurationMs: z.number().nonnegative().optional(),
   // Distinct tools used, count each.
   toolUsage: z.record(z.string(), z.number().int().nonnegative()),
   // Top errors by class.

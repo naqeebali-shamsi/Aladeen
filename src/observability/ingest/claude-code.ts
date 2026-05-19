@@ -321,21 +321,20 @@ export class ClaudeCodeIngester {
       timestamp: latestTs,
     });
 
-    // Outcome inference. Conservative: only mark `errored` if the last
-    // emitted error event was fatal; otherwise default to `completed`
-    // unless the trace looks like it was interrupted or is the active
-    // session (file modified within last 5 minutes — heuristic).
-    const outcome: SessionOutcome = (() => {
-      if (sawFatalError) return 'errored';
-      if (sawInterrupt) return 'interrupted';
-      if (opts.mtime && Date.now() - opts.mtime.getTime() < 5 * 60 * 1000) {
-        return 'running';
-      }
-      if (events.some(e => e.kind === 'user_message' || e.kind === 'tool_call')) {
-        return 'completed';
-      }
-      return 'unknown';
-    })();
+    // Outcome inference (v2). Order matters — earlier checks win.
+    //   1. Fresh file mtime → 'running' (session may still be in progress)
+    //   2. Saw explicit interrupt event → 'interrupted'
+    //   3. Saw fatal error event → 'errored'
+    //   4. Trailing tool_results were mostly failures (>=80% of last 5)
+    //      and the session ends on a failure → 'errored' (silently bombed)
+    //   5. Dangling tool_call (no matching tool_result) at end → 'gave_up'
+    //   6. Any meaningful event happened → 'completed'
+    //   7. Otherwise → 'unknown'
+    const outcome: SessionOutcome = inferOutcome(events, {
+      sawFatalError,
+      sawInterrupt,
+      mtime: opts.mtime,
+    });
 
     const trace: SessionTrace = {
       schemaVersion: '1',
@@ -437,6 +436,44 @@ function decodeProjectDirName(encoded: string): string {
     return `~/...${encoded}`;
   }
   return encoded;
+}
+
+// Sharper outcome inference. See call site for rule order.
+function inferOutcome(
+  events: SessionEvent[],
+  ctx: { sawFatalError: boolean; sawInterrupt: boolean; mtime?: Date },
+): SessionOutcome {
+  if (ctx.mtime && Date.now() - ctx.mtime.getTime() < 5 * 60 * 1000) {
+    return 'running';
+  }
+  if (ctx.sawInterrupt) return 'interrupted';
+  if (ctx.sawFatalError) return 'errored';
+
+  // Trailing failure ratio: look at last 5 tool_results.
+  const toolResults = events.filter(
+    (e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result',
+  );
+  if (toolResults.length > 0) {
+    const tail = toolResults.slice(-5);
+    const fails = tail.filter((r) => !r.ok).length;
+    const lastResult = toolResults[toolResults.length - 1];
+    if (tail.length >= 3 && fails / tail.length >= 0.8 && !lastResult.ok) {
+      return 'errored';
+    }
+  }
+
+  // Dangling tool_call: open IDs at end of stream.
+  const openCalls = new Set<string>();
+  for (const e of events) {
+    if (e.kind === 'tool_call') openCalls.add(e.callId);
+    else if (e.kind === 'tool_result') openCalls.delete(e.callId);
+  }
+  if (openCalls.size > 0) return 'gave_up';
+
+  if (events.some((e) => e.kind === 'user_message' || e.kind === 'tool_call')) {
+    return 'completed';
+  }
+  return 'unknown';
 }
 
 function classifyError(text: string): ErrorClass {
