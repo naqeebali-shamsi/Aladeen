@@ -15,6 +15,7 @@ import { configExists, loadSecretsIntoEnv } from './config/index.js';
 import os from 'node:os';
 import { ClaudeCodeIngester } from './observability/ingest/claude-code.js';
 import { OpencodeIngester } from './observability/ingest/opencode.js';
+import { AladeenRunsIngester } from './observability/ingest/aladeen-runs.js';
 import { computeDigest } from './observability/digest.js';
 import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
@@ -334,7 +335,42 @@ program
       return;
     }
 
-    console.error(`Unknown ingest source "${source}". Supported: claude-code, opencode`);
+    if (source === 'aladeen-runs') {
+      const ingester = new AladeenRunsIngester();
+      const runsDir = opts.path ?? path.join(opts.repoRoot, '.aladeen', 'runs');
+      const files = await ingester.listRunFiles(runsDir);
+      if (files.length === 0) {
+        console.error(`No run files found at ${runsDir}`);
+        process.exit(1);
+      }
+      if (!opts.quiet) console.log(`Ingesting ${files.length} aladeen run(s) from ${runsDir}\n`);
+
+      let ok = 0; let warn = 0;
+      for (const file of files) {
+        try {
+          const result = await ingester.ingestFile(file);
+          const digest = computeDigest(result.trace);
+          await storage.writeTrace(result.trace);
+          await storage.writeDigest(digest);
+          ok += 1;
+          warn += result.warnings.length;
+          if (!opts.quiet) {
+            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
+            console.log(`  ok  ${result.trace.sessionId.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
+            if (result.warnings.length > 0) {
+              for (const w of result.warnings) console.warn(`  warn ${result.trace.sessionId}: ${w}`);
+            }
+          }
+        } catch (err) {
+          console.error(`  err ${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      console.log(`\nIngested ${ok}/${files.length} run(s). Warnings: ${warn}.`);
+      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      return;
+    }
+
+    console.error(`Unknown ingest source "${source}". Supported: claude-code, opencode, aladeen-runs`);
     process.exit(1);
   });
 
