@@ -36,14 +36,14 @@ export class IngestStorage {
 
   async writeTrace(trace: SessionTrace): Promise<string> {
     await this.ensureDirs();
-    const filePath = path.join(this.sessionsDir, `${trace.sessionId}.trace.json`);
+    const filePath = path.join(this.sessionsDir, `${sanitizeForFs(trace.sessionId)}.trace.json`);
     await writeFile(filePath, JSON.stringify(trace, null, 2), 'utf-8');
     return filePath;
   }
 
   async writeDigest(digest: RunDigest): Promise<string> {
     await this.ensureDirs();
-    const filePath = path.join(this.digestsDir, `${digest.sessionId}.digest.json`);
+    const filePath = path.join(this.digestsDir, `${sanitizeForFs(digest.sessionId)}.digest.json`);
     await writeFile(filePath, JSON.stringify(digest, null, 2), 'utf-8');
     return filePath;
   }
@@ -71,7 +71,7 @@ export class IngestStorage {
   }
 
   async loadTrace(sessionId: string): Promise<SessionTrace | null> {
-    const filePath = path.join(this.sessionsDir, `${sessionId}.trace.json`);
+    const filePath = path.join(this.sessionsDir, `${sanitizeForFs(sessionId)}.trace.json`);
     try {
       const raw = await readFile(filePath, 'utf-8');
       const parsed = SessionTraceSchema.safeParse(JSON.parse(raw));
@@ -80,4 +80,12 @@ export class IngestStorage {
       return null;
     }
   }
+}
+
+// SessionId may contain a provider prefix like "opencode:ses_xxx" — the
+// colon is illegal on Windows (NTFS interprets it as an alternate data
+// stream). Replace any character not in [A-Za-z0-9._-] with '_'. Stable
+// 1:1 within a single provider's id space.
+export function sanitizeForFs(id: string): string {
+  return id.replace(/[^A-Za-z0-9._-]/g, '_');
 }

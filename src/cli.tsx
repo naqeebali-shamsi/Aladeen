@@ -14,6 +14,7 @@ import { bucketFailures } from './engine/failure-buckets.js';
 import { configExists, loadSecretsIntoEnv } from './config/index.js';
 import os from 'node:os';
 import { ClaudeCodeIngester } from './observability/ingest/claude-code.js';
+import { OpencodeIngester } from './observability/ingest/opencode.js';
 import { computeDigest } from './observability/digest.js';
 import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
@@ -252,59 +253,88 @@ program
 
 program
   .command('ingest <source>')
-  .description('Ingest agent CLI session logs (currently: claude-code)')
-  .option('--path <path>', 'Path to a .jsonl file or a Claude Code project directory. Default: ~/.claude/projects/<encoded-cwd>')
+  .description('Ingest agent CLI session logs (supported: claude-code, opencode)')
+  .option('--path <path>', 'For claude-code: .jsonl file or project dir (default: ~/.claude/projects/<encoded-cwd>). For opencode: path to opencode.db (default: ~/.local/share/opencode/opencode.db)')
   .option('--repo-root <path>', 'Repository root for storage', process.cwd())
   .option('--quiet', 'Suppress per-session output')
   .action(async (
     source: string,
     opts: { path?: string; repoRoot: string; quiet?: boolean },
   ) => {
-    if (source !== 'claude-code') {
-      console.error(`Unknown ingest source "${source}". Supported: claude-code`);
-      process.exit(1);
-    }
-
-    const ingester = new ClaudeCodeIngester();
     const storage = new IngestStorage(opts.repoRoot);
 
-    const targetPath = opts.path ?? defaultClaudeCodeProjectDir(opts.repoRoot);
-    const targets = await resolveIngestTargets(targetPath, ingester);
-    if (targets.length === 0) {
-      console.error(`No .jsonl session files found at ${targetPath}`);
-      process.exit(1);
-    }
-
-    if (!opts.quiet) {
-      console.log(`Ingesting ${targets.length} session(s) from ${targetPath}\n`);
-    }
-
-    let okCount = 0;
-    let warnCount = 0;
-    for (const source of targets) {
-      try {
-        const result = await ingester.ingestFile(source);
-        const digest = computeDigest(result.trace);
-        await storage.writeTrace(result.trace);
-        await storage.writeDigest(digest);
-        okCount += 1;
-        if (result.warnings.length > 0) {
-          warnCount += result.warnings.length;
-          if (!opts.quiet) {
-            for (const w of result.warnings) console.warn(`  warn ${source.sessionId}: ${w}`);
-          }
-        }
-        if (!opts.quiet) {
-          const fails = digest.toolFailureCount > 0 ? ` (toolFails=${digest.toolFailureCount})` : '';
-          console.log(`  ok  ${source.sessionId.padEnd(36)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
-        }
-      } catch (err) {
-        console.error(`  err ${source.sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+    if (source === 'claude-code') {
+      const ingester = new ClaudeCodeIngester();
+      const targetPath = opts.path ?? defaultClaudeCodeProjectDir(opts.repoRoot);
+      const targets = await resolveIngestTargets(targetPath, ingester);
+      if (targets.length === 0) {
+        console.error(`No .jsonl session files found at ${targetPath}`);
+        process.exit(1);
       }
+      if (!opts.quiet) console.log(`Ingesting ${targets.length} claude-code session(s) from ${targetPath}\n`);
+
+      let ok = 0; let warn = 0;
+      for (const t of targets) {
+        try {
+          const result = await ingester.ingestFile(t);
+          const digest = computeDigest(result.trace);
+          await storage.writeTrace(result.trace);
+          await storage.writeDigest(digest);
+          ok += 1;
+          warn += result.warnings.length;
+          if (!opts.quiet) {
+            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
+            console.log(`  ok  ${t.sessionId.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
+          }
+        } catch (err) {
+          console.error(`  err ${t.sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      console.log(`\nIngested ${ok}/${targets.length} session(s). Warnings: ${warn}.`);
+      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      return;
     }
 
-    console.log(`\nIngested ${okCount}/${targets.length} session(s). Warnings: ${warnCount}.`);
-    console.log(`Run \`aladeen report\` to see failure patterns.`);
+    if (source === 'opencode') {
+      const ingester = new OpencodeIngester();
+      const dbPath = opts.path ?? defaultOpencodeDbPath();
+      let sessions;
+      try {
+        sessions = await ingester.listSessions(dbPath);
+      } catch (err) {
+        console.error(`Failed to read opencode DB at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+      if (sessions.length === 0) {
+        console.error(`No sessions found in ${dbPath}`);
+        process.exit(1);
+      }
+      if (!opts.quiet) console.log(`Ingesting ${sessions.length} opencode session(s) from ${dbPath}\n`);
+
+      let ok = 0; let warn = 0;
+      for (const s of sessions) {
+        try {
+          const result = await ingester.ingestSession(dbPath, s);
+          const digest = computeDigest(result.trace);
+          await storage.writeTrace(result.trace);
+          await storage.writeDigest(digest);
+          ok += 1;
+          warn += result.warnings.length;
+          if (!opts.quiet) {
+            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
+            console.log(`  ok  ${`opencode:${s.id}`.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
+          }
+        } catch (err) {
+          console.error(`  err opencode:${s.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      console.log(`\nIngested ${ok}/${sessions.length} session(s). Warnings: ${warn}.`);
+      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      return;
+    }
+
+    console.error(`Unknown ingest source "${source}". Supported: claude-code, opencode`);
+    process.exit(1);
   });
 
 program
@@ -336,6 +366,13 @@ program
 function defaultClaudeCodeProjectDir(repoRoot: string): string {
   const encoded = path.resolve(repoRoot).replace(/[\\/:]/g, '-');
   return path.join(os.homedir(), '.claude', 'projects', encoded);
+}
+
+function defaultOpencodeDbPath(): string {
+  // SST opencode stores its global DB under XDG_DATA_HOME (defaults to
+  // ~/.local/share on linux/macOS; on Windows the bash shim resolves
+  // $HOME to %USERPROFILE%, which mirrors the same layout).
+  return path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
 }
 
 async function resolveIngestTargets(
