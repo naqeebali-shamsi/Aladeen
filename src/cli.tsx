@@ -12,6 +12,11 @@ import { createImplementFeatureLocalBlueprint } from './blueprints/index.js';
 import { createLocalFirstRunnerOptions } from './engine/local-runner-options.js';
 import { bucketFailures } from './engine/failure-buckets.js';
 import { configExists, loadSecretsIntoEnv } from './config/index.js';
+import os from 'node:os';
+import { ClaudeCodeIngester } from './observability/ingest/claude-code.js';
+import { computeDigest } from './observability/digest.js';
+import { IngestStorage } from './observability/storage.js';
+import { formatReport } from './observability/report.js';
 
 const program = new Command();
 
@@ -246,11 +251,114 @@ program
   });
 
 program
+  .command('ingest <source>')
+  .description('Ingest agent CLI session logs (currently: claude-code)')
+  .option('--path <path>', 'Path to a .jsonl file or a Claude Code project directory. Default: ~/.claude/projects/<encoded-cwd>')
+  .option('--repo-root <path>', 'Repository root for storage', process.cwd())
+  .option('--quiet', 'Suppress per-session output')
+  .action(async (
+    source: string,
+    opts: { path?: string; repoRoot: string; quiet?: boolean },
+  ) => {
+    if (source !== 'claude-code') {
+      console.error(`Unknown ingest source "${source}". Supported: claude-code`);
+      process.exit(1);
+    }
+
+    const ingester = new ClaudeCodeIngester();
+    const storage = new IngestStorage(opts.repoRoot);
+
+    const targetPath = opts.path ?? defaultClaudeCodeProjectDir(opts.repoRoot);
+    const targets = await resolveIngestTargets(targetPath, ingester);
+    if (targets.length === 0) {
+      console.error(`No .jsonl session files found at ${targetPath}`);
+      process.exit(1);
+    }
+
+    if (!opts.quiet) {
+      console.log(`Ingesting ${targets.length} session(s) from ${targetPath}\n`);
+    }
+
+    let okCount = 0;
+    let warnCount = 0;
+    for (const source of targets) {
+      try {
+        const result = await ingester.ingestFile(source);
+        const digest = computeDigest(result.trace);
+        await storage.writeTrace(result.trace);
+        await storage.writeDigest(digest);
+        okCount += 1;
+        if (result.warnings.length > 0) {
+          warnCount += result.warnings.length;
+          if (!opts.quiet) {
+            for (const w of result.warnings) console.warn(`  warn ${source.sessionId}: ${w}`);
+          }
+        }
+        if (!opts.quiet) {
+          const fails = digest.toolFailureCount > 0 ? ` (toolFails=${digest.toolFailureCount})` : '';
+          console.log(`  ok  ${source.sessionId.padEnd(36)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
+        }
+      } catch (err) {
+        console.error(`  err ${source.sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    console.log(`\nIngested ${okCount}/${targets.length} session(s). Warnings: ${warnCount}.`);
+    console.log(`Run \`aladeen report\` to see failure patterns.`);
+  });
+
+program
+  .command('report')
+  .description('Print failure pattern report from ingested sessions')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .option('--all', 'Include successful sessions in the per-session table')
+  .option('--limit <n>', 'Max sessions in per-session table', '20')
+  .action(async (opts: { repoRoot: string; all?: boolean; limit: string }) => {
+    const storage = new IngestStorage(opts.repoRoot);
+    const digests = await storage.listDigests();
+    const limit = Number.parseInt(opts.limit, 10);
+    console.log(formatReport(digests, {
+      failuresOnly: !opts.all,
+      limitSessions: Number.isFinite(limit) ? limit : 20,
+    }));
+  });
+
+program
   .command('tui', { isDefault: true })
   .description('Launch the interactive multi-CLI TUI')
   .action(() => {
     console.clear();
     render(<AladeenApp />);
   });
+
+// Encodes the cwd into the ~/.claude/projects/<encoded>/ folder name. The
+// Claude Code convention replaces drive colons and path separators with '-'.
+function defaultClaudeCodeProjectDir(repoRoot: string): string {
+  const encoded = path.resolve(repoRoot).replace(/[\\/:]/g, '-');
+  return path.join(os.homedir(), '.claude', 'projects', encoded);
+}
+
+async function resolveIngestTargets(
+  targetPath: string,
+  ingester: ClaudeCodeIngester,
+): Promise<Array<{ sessionId: string; filePath: string; parentSessionId?: string }>> {
+  const { stat } = await import('node:fs/promises');
+  let info;
+  try {
+    info = await stat(targetPath);
+  } catch {
+    return [];
+  }
+  if (info.isFile()) {
+    return [{
+      sessionId: path.basename(targetPath).replace(/\.jsonl$/, ''),
+      filePath: targetPath,
+    }];
+  }
+  if (info.isDirectory()) {
+    return ingester.listSessions(targetPath);
+  }
+  return [];
+}
 
 program.parse(process.argv);
