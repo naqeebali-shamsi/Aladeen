@@ -16,6 +16,7 @@ import os from 'node:os';
 import { ClaudeCodeIngester } from './observability/ingest/claude-code.js';
 import { OpencodeIngester } from './observability/ingest/opencode.js';
 import { AladeenRunsIngester } from './observability/ingest/aladeen-runs.js';
+import { CodexIngester } from './observability/ingest/codex.js';
 import { computeDigest } from './observability/digest.js';
 import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
@@ -335,6 +336,38 @@ program
       return;
     }
 
+    if (source === 'codex') {
+      const ingester = new CodexIngester();
+      const rootDir = opts.path ?? path.join(os.homedir(), '.codex', 'sessions');
+      const files = await ingester.listSessions(rootDir);
+      if (files.length === 0) {
+        console.error(`No rollout-*.jsonl session files found under ${rootDir}`);
+        process.exit(1);
+      }
+      if (!opts.quiet) console.log(`Ingesting ${files.length} codex session(s) from ${rootDir}\n`);
+
+      let ok = 0; let warn = 0;
+      for (const file of files) {
+        try {
+          const result = await ingester.ingestFile(file);
+          const digest = computeDigest(result.trace);
+          await storage.writeTrace(result.trace);
+          await storage.writeDigest(digest);
+          ok += 1;
+          warn += result.warnings.length;
+          if (!opts.quiet) {
+            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
+            console.log(`  ok  ${result.trace.sessionId.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
+          }
+        } catch (err) {
+          console.error(`  err ${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      console.log(`\nIngested ${ok}/${files.length} session(s). Warnings: ${warn}.`);
+      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      return;
+    }
+
     if (source === 'aladeen-runs') {
       const ingester = new AladeenRunsIngester();
       const runsDir = opts.path ?? path.join(opts.repoRoot, '.aladeen', 'runs');
@@ -370,7 +403,7 @@ program
       return;
     }
 
-    console.error(`Unknown ingest source "${source}". Supported: claude-code, opencode, aladeen-runs`);
+    console.error(`Unknown ingest source "${source}". Supported: claude-code, opencode, codex, aladeen-runs`);
     process.exit(1);
   });
 
