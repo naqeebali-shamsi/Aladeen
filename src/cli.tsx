@@ -18,6 +18,7 @@ import { OpencodeIngester } from './observability/ingest/opencode.js';
 import { computeDigest } from './observability/digest.js';
 import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
+import { replayFingerprint } from './observability/replay.js';
 
 const program = new Command();
 
@@ -351,6 +352,24 @@ program
       failuresOnly: !opts.all,
       limitSessions: Number.isFinite(limit) ? limit : 20,
     }));
+  });
+
+program
+  .command('replay <fingerprint>')
+  .description('Drill into all sessions matching a patternFingerprint (prefix match when unambiguous)')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .option('--max-sessions <n>', 'Max sessions to deep-load', '10')
+  .action(async (fp: string, opts: { repoRoot: string; maxSessions: string }) => {
+    const storage = new IngestStorage(opts.repoRoot);
+    const max = Number.parseInt(opts.maxSessions, 10);
+    const result = await replayFingerprint(fp, storage, {
+      maxDeepLoad: Number.isFinite(max) ? max : 10,
+    });
+    if (result.matchedDigests.length === 0) {
+      console.error(result.markdown);
+      process.exit(1);
+    }
+    console.log(result.markdown);
   });
 
 program
