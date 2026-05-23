@@ -10,6 +10,16 @@ import {
 } from '../session-trace.js';
 import { Scrubber } from '../scrubber.js';
 import { ExecutionStateSchema, type ExecutionState, type NodeResult } from '../../engine/types.js';
+import { classifyError } from './_shared/classify-error.js';
+
+// Aladeen-runs adds two domain-specific error classes the other ingesters
+// never emit. They're passed to the shared classifier as extraClasses so
+// they shadow `tool_error` for blueprint-engine failures without polluting
+// the generic patterns used by claude-code / opencode / codex ingest.
+const ALADEEN_EXTRA_ERROR_RULES = [
+  { pattern: /lint|eslint|tsc.*error/, class: 'lint_loop' as const },
+  { pattern: /worktree|fatal: '.*' is not a working tree/, class: 'worktree_collision' as const },
+];
 
 // Ingester for Aladeen's own blueprint runs. Reads ExecutionState JSON
 // files from <repoRoot>/.aladeen/runs/ and converts each to a SessionTrace.
@@ -237,18 +247,8 @@ function pickWrittenPath(nodeId: string, result: NodeResult): string | undefined
 }
 
 function classifyNodeError(result: NodeResult): ErrorClass {
-  const text = (result.error ?? result.summary ?? '').toLowerCase();
-  if (/rate.?limit|429/.test(text)) return 'rate_limit';
-  if (/context (length|window).*exceed/.test(text)) return 'context_overflow';
-  if (/command not found|not recognized/.test(text)) return 'binary_not_found';
-  if (/permission denied|eacces/.test(text)) return 'permission_denied';
-  if (/timed? ?out|etimedout/.test(text)) return 'timeout';
-  if (/econnrefused|enotfound|network/.test(text)) return 'network';
-  if (/auth|401|403|unauthorized/.test(text)) return 'auth';
-  if (/lint|eslint|tsc.*error/.test(text)) return 'lint_loop';
-  if (/worktree|fatal: '.*' is not a working tree/.test(text)) return 'worktree_collision';
-  if (/parse|syntax/.test(text)) return 'parse_error';
-  return 'tool_error';
+  const text = result.error ?? result.summary ?? '';
+  return classifyError(text, ALADEEN_EXTRA_ERROR_RULES);
 }
 
 function mapStatusToOutcome(

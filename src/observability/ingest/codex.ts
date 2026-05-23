@@ -5,10 +5,11 @@ import {
   SessionTraceSchema,
   type SessionEvent,
   type SessionTrace,
-  type SessionOutcome,
-  type ErrorClass,
 } from '../session-trace.js';
 import { Scrubber } from '../scrubber.js';
+import { parseJsonl, type RawLine } from './_shared/jsonl.js';
+import { inferOutcome } from './_shared/outcome.js';
+import { classifyError } from './_shared/classify-error.js';
 
 // Ingester for OpenAI Codex CLI session transcripts. Codex writes JSONL
 // rollouts to:
@@ -35,11 +36,6 @@ import { Scrubber } from '../scrubber.js';
 // fire regardless.
 
 const SHELL_OUTPUT_EXIT_RE = /^Exit code:\s*(-?\d+)/m;
-
-interface RawLine {
-  raw: Record<string, unknown>;
-  lineNumber: number;
-}
 
 interface SessionMetaPayload {
   id?: string;
@@ -260,7 +256,11 @@ export class CodexIngester {
       timestamp: lastTs,
     });
 
-    const outcome = inferOutcome(events, opts.mtime);
+    const outcome = inferOutcome(events, {
+      sawFatalError: false,
+      sawInterrupt: false,
+      mtime: opts.mtime,
+    });
 
     const trace: SessionTrace = {
       schemaVersion: '1',
@@ -300,24 +300,6 @@ export class CodexIngester {
   }
 }
 
-function parseJsonl(text: string): RawLine[] {
-  const out: RawLine[] = [];
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed && typeof parsed === 'object') {
-        out.push({ raw: parsed as Record<string, unknown>, lineNumber: i + 1 });
-      }
-    } catch {
-      // Tolerate corrupt lines.
-    }
-  }
-  return out;
-}
-
 function extractMessageText(content: MessagePayload['content']): string | undefined {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return undefined;
@@ -341,39 +323,3 @@ function parseFunctionCallArgs(args: string | undefined): Record<string, unknown
   }
 }
 
-function classifyError(text: string): ErrorClass {
-  const t = text.toLowerCase();
-  if (/rate.?limit|429/.test(t)) return 'rate_limit';
-  if (/context (length|window).*exceed/.test(t)) return 'context_overflow';
-  if (/command not found|not recognized|is not recognized as/.test(t)) return 'binary_not_found';
-  if (/permission denied|eacces/.test(t)) return 'permission_denied';
-  if (/timed? ?out|etimedout/.test(t)) return 'timeout';
-  if (/econnrefused|enotfound/.test(t)) return 'network';
-  if (/auth|401|403|unauthorized/.test(t)) return 'auth';
-  if (/parse|syntax|unexpected token/.test(t)) return 'parse_error';
-  return 'tool_error';
-}
-
-function inferOutcome(events: SessionEvent[], mtime?: Date): SessionOutcome {
-  if (mtime && Date.now() - mtime.getTime() < 5 * 60 * 1000) return 'running';
-
-  const toolResults = events.filter(
-    (e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result',
-  );
-  if (toolResults.length > 0) {
-    const tail = toolResults.slice(-5);
-    const fails = tail.filter((r) => !r.ok).length;
-    const last = toolResults[toolResults.length - 1];
-    if (tail.length >= 3 && fails / tail.length >= 0.8 && !last.ok) return 'errored';
-  }
-
-  const open = new Set<string>();
-  for (const e of events) {
-    if (e.kind === 'tool_call') open.add(e.callId);
-    else if (e.kind === 'tool_result') open.delete(e.callId);
-  }
-  if (open.size > 0) return 'gave_up';
-
-  if (events.some((e) => e.kind === 'user_message' || e.kind === 'tool_call')) return 'completed';
-  return 'unknown';
-}

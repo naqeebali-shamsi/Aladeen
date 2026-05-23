@@ -5,10 +5,11 @@ import {
   SessionTraceSchema,
   type SessionEvent,
   type SessionTrace,
-  type SessionOutcome,
-  type ErrorClass,
 } from '../session-trace.js';
 import { Scrubber } from '../scrubber.js';
+import { inferOutcome } from './_shared/outcome.js';
+import { classifyError } from './_shared/classify-error.js';
+import { msToIso } from './_shared/time.js';
 
 // Ingester for SST opencode. Sessions live in a SQLite DB at
 //   ~/.local/share/opencode/opencode.db   (global, all projects)
@@ -321,7 +322,7 @@ export class OpencodeIngester {
     const outcome = inferOutcome(events, {
       sawFatalError,
       sawInterrupt: false,
-      sessionUpdated: session.time_updated,
+      mtime: session.time_updated ? new Date(session.time_updated) : undefined,
     });
 
     const trace: SessionTrace = {
@@ -381,11 +382,6 @@ function safeParseJson<T>(s: string | undefined): T | undefined {
   }
 }
 
-function msToIso(ms: number | undefined): string | undefined {
-  if (!ms || !Number.isFinite(ms)) return undefined;
-  return new Date(ms).toISOString();
-}
-
 function stringifyOutput(output: unknown): string | undefined {
   if (output == null) return undefined;
   if (typeof output === 'string') return output;
@@ -410,56 +406,6 @@ function pickWrittenContent(tool: string, input: Record<string, unknown>): strin
 // We still defang single quotes defensively.
 function sqlQuoteId(id: string): string {
   return id.replace(/'/g, "''");
-}
-
-function classifyError(text: string): ErrorClass {
-  const t = text.toLowerCase();
-  if (/rate.?limit|429|too many requests/.test(t)) return 'rate_limit';
-  if (/context (length|window).*exceed|too many tokens/.test(t)) return 'context_overflow';
-  if (/command not found|not recognized/.test(t)) return 'binary_not_found';
-  if (/permission denied|eacces/.test(t)) return 'permission_denied';
-  if (/timed? ?out|etimedout/.test(t)) return 'timeout';
-  if (/econnrefused|enotfound|network/.test(t)) return 'network';
-  if (/auth|401|403|unauthorized/.test(t)) return 'auth';
-  if (/schemaerror|missing key|parse|syntax|unexpected token|invalid arguments/.test(t)) return 'parse_error';
-  return 'tool_error';
-}
-
-// Shared with Claude Code ingester. Eventually pull this into a common
-// module once a third ingester needs it.
-function inferOutcome(
-  events: SessionEvent[],
-  ctx: { sawFatalError: boolean; sawInterrupt: boolean; sessionUpdated?: number },
-): SessionOutcome {
-  if (ctx.sessionUpdated && Date.now() - ctx.sessionUpdated < 5 * 60 * 1000) {
-    return 'running';
-  }
-  if (ctx.sawInterrupt) return 'interrupted';
-  if (ctx.sawFatalError) return 'errored';
-
-  const toolResults = events.filter(
-    (e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result',
-  );
-  if (toolResults.length > 0) {
-    const tail = toolResults.slice(-5);
-    const fails = tail.filter((r) => !r.ok).length;
-    const last = toolResults[toolResults.length - 1];
-    if (tail.length >= 3 && fails / tail.length >= 0.8 && !last.ok) {
-      return 'errored';
-    }
-  }
-
-  const openCalls = new Set<string>();
-  for (const e of events) {
-    if (e.kind === 'tool_call') openCalls.add(e.callId);
-    else if (e.kind === 'tool_result') openCalls.delete(e.callId);
-  }
-  if (openCalls.size > 0) return 'gave_up';
-
-  if (events.some((e) => e.kind === 'user_message' || e.kind === 'tool_call')) {
-    return 'completed';
-  }
-  return 'unknown';
 }
 
 // Default SQL runner: spawn `sqlite3 -readonly -json <db> <query>`. Output
