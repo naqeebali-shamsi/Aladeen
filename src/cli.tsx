@@ -17,10 +17,10 @@ import { ClaudeCodeIngester } from './observability/ingest/claude-code.js';
 import { OpencodeIngester } from './observability/ingest/opencode.js';
 import { AladeenRunsIngester } from './observability/ingest/aladeen-runs.js';
 import { CodexIngester } from './observability/ingest/codex.js';
-import { computeDigest } from './observability/digest.js';
 import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
 import { replayFingerprint } from './observability/replay.js';
+import { runIngestPipeline } from './observability/ingest-runner.js';
 
 const program = new Command();
 
@@ -274,27 +274,15 @@ program
         console.error(`No .jsonl session files found at ${targetPath}`);
         process.exit(1);
       }
-      if (!opts.quiet) console.log(`Ingesting ${targets.length} claude-code session(s) from ${targetPath}\n`);
-
-      let ok = 0; let warn = 0;
-      for (const t of targets) {
-        try {
-          const result = await ingester.ingestFile(t);
-          const digest = computeDigest(result.trace);
-          await storage.writeTrace(result.trace);
-          await storage.writeDigest(digest);
-          ok += 1;
-          warn += result.warnings.length;
-          if (!opts.quiet) {
-            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
-            console.log(`  ok  ${t.sessionId.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
-          }
-        } catch (err) {
-          console.error(`  err ${t.sessionId}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      console.log(`\nIngested ${ok}/${targets.length} session(s). Warnings: ${warn}.`);
-      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      await runIngestPipeline({
+        sourceLabel: 'claude-code',
+        sourcePath: targetPath,
+        targets,
+        ingestOne: (t) => ingester.ingestFile(t),
+        displayId: (t) => t.sessionId,
+        storage,
+        quiet: opts.quiet,
+      });
       return;
     }
 
@@ -312,27 +300,15 @@ program
         console.error(`No sessions found in ${dbPath}`);
         process.exit(1);
       }
-      if (!opts.quiet) console.log(`Ingesting ${sessions.length} opencode session(s) from ${dbPath}\n`);
-
-      let ok = 0; let warn = 0;
-      for (const s of sessions) {
-        try {
-          const result = await ingester.ingestSession(dbPath, s);
-          const digest = computeDigest(result.trace);
-          await storage.writeTrace(result.trace);
-          await storage.writeDigest(digest);
-          ok += 1;
-          warn += result.warnings.length;
-          if (!opts.quiet) {
-            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
-            console.log(`  ok  ${`opencode:${s.id}`.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
-          }
-        } catch (err) {
-          console.error(`  err opencode:${s.id}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      console.log(`\nIngested ${ok}/${sessions.length} session(s). Warnings: ${warn}.`);
-      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      await runIngestPipeline({
+        sourceLabel: 'opencode',
+        sourcePath: dbPath,
+        targets: sessions,
+        ingestOne: (s) => ingester.ingestSession(dbPath, s),
+        displayId: (s) => `opencode:${s.id}`,
+        storage,
+        quiet: opts.quiet,
+      });
       return;
     }
 
@@ -344,27 +320,15 @@ program
         console.error(`No rollout-*.jsonl session files found under ${rootDir}`);
         process.exit(1);
       }
-      if (!opts.quiet) console.log(`Ingesting ${files.length} codex session(s) from ${rootDir}\n`);
-
-      let ok = 0; let warn = 0;
-      for (const file of files) {
-        try {
-          const result = await ingester.ingestFile(file);
-          const digest = computeDigest(result.trace);
-          await storage.writeTrace(result.trace);
-          await storage.writeDigest(digest);
-          ok += 1;
-          warn += result.warnings.length;
-          if (!opts.quiet) {
-            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
-            console.log(`  ok  ${result.trace.sessionId.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
-          }
-        } catch (err) {
-          console.error(`  err ${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      console.log(`\nIngested ${ok}/${files.length} session(s). Warnings: ${warn}.`);
-      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      await runIngestPipeline({
+        sourceLabel: 'codex',
+        sourcePath: rootDir,
+        targets: files,
+        ingestOne: (f) => ingester.ingestFile(f),
+        displayId: (f, result) => result?.trace.sessionId ?? path.basename(f),
+        storage,
+        quiet: opts.quiet,
+      });
       return;
     }
 
@@ -376,30 +340,17 @@ program
         console.error(`No run files found at ${runsDir}`);
         process.exit(1);
       }
-      if (!opts.quiet) console.log(`Ingesting ${files.length} aladeen run(s) from ${runsDir}\n`);
-
-      let ok = 0; let warn = 0;
-      for (const file of files) {
-        try {
-          const result = await ingester.ingestFile(file);
-          const digest = computeDigest(result.trace);
-          await storage.writeTrace(result.trace);
-          await storage.writeDigest(digest);
-          ok += 1;
-          warn += result.warnings.length;
-          if (!opts.quiet) {
-            const fails = digest.toolFailureCount > 0 ? ` toolFails=${digest.toolFailureCount}` : '';
-            console.log(`  ok  ${result.trace.sessionId.padEnd(38)} events=${result.trace.events.length} outcome=${result.trace.outcome}${fails}`);
-            if (result.warnings.length > 0) {
-              for (const w of result.warnings) console.warn(`  warn ${result.trace.sessionId}: ${w}`);
-            }
-          }
-        } catch (err) {
-          console.error(`  err ${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      console.log(`\nIngested ${ok}/${files.length} run(s). Warnings: ${warn}.`);
-      console.log(`Run \`aladeen report\` to see failure patterns.`);
+      await runIngestPipeline({
+        sourceLabel: 'aladeen',
+        sourcePath: runsDir,
+        itemLabel: 'run',
+        targets: files,
+        ingestOne: (f) => ingester.ingestFile(f),
+        displayId: (f, result) => result?.trace.sessionId ?? path.basename(f),
+        storage,
+        quiet: opts.quiet,
+        printWarnings: true,
+      });
       return;
     }
 
