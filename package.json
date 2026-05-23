@@ -1,18 +1,51 @@
 {
   "name": "aladeen",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "description": "Observability and learning layer for agent CLIs (Claude Code, opencode, Codex, OpenClaw). Ingests session logs, classifies failures, replays known-good blueprints.",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "aladeen": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "ROADMAP.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/index.tsx",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "claude-code",
+    "opencode",
+    "codex",
+    "openclaw",
+    "agent",
+    "agentic",
+    "observability",
+    "session-trace",
+    "failure-analysis",
+    "cli"
+  ],
+  "author": "Naqeebali Shamsi <naeemnh@outlook.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "TODO: set to git+https://github.com/<org>/aladeen.git before first publish"
+  },
+  "homepage": "TODO: set to https://github.com/<org>/aladeen#readme before first publish",
+  "bugs": {
+    "url": "TODO: set to https://github.com/<org>/aladeen/issues before first publish"
+  },
   "dependencies": {
     "@types/cross-spawn": "^6.0.6",
     "chalk": "^5.3.0",

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import * as React from 'react';
 import { render } from 'ink';
 import { Command } from 'commander';
@@ -28,7 +29,7 @@ const program = new Command();
 program
   .name('aladeen')
   .version('0.1.0')
-  .description('Aladeen - Autonomous agentic orchestration');
+  .description('Observability + learning layer for agent CLIs. Ingest session logs, surface failure patterns, replay known-good blueprints.');
 
 program
   .command('setup')

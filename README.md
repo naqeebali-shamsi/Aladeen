@@ -2,13 +2,28 @@
 
 Observability and learning layer for agent CLIs.
 
-Aladeen reads the session logs that tools like **Claude Code**, **opencode**, and (soon) **Codex** leave behind, normalizes them into a single schema, and produces failure-pattern reports + drill-down replays. It doesn't replace your agent — it watches it work and tells you where it keeps getting stuck.
+Aladeen reads the session logs that tools like **Claude Code**, **opencode**, **Codex**, and **OpenClaw** leave behind, normalizes them into a single schema, and produces failure-pattern reports + drill-down replays. It doesn't replace your agent — it watches it work and tells you where it keeps getting stuck.
+
+## Install
+
+```
+npm install -g aladeen
+```
+
+Or run without installing:
+
+```
+npx aladeen report
+```
 
 ## What it does today
 
 ```
 aladeen ingest claude-code          # parse ~/.claude/projects/<repo>/*.jsonl
 aladeen ingest opencode             # parse ~/.local/share/opencode/opencode.db
+aladeen ingest codex                # parse ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+aladeen ingest openclaw             # parse ~/.openclaw/agents/<id>/sessions/*.jsonl
+aladeen ingest aladeen-runs         # parse <repo>/.aladeen/runs/*.json (Aladeen's own runs)
 aladeen report                      # show failure-pattern buckets across all ingested sessions
 aladeen replay <fingerprint>        # drill into a single bucket: files touched, asks, first failures
 ```
@@ -46,9 +61,18 @@ src/observability/
   storage.ts                # On-disk layout: .aladeen/ingested/{sessions,digests}/
   report.ts                 # Terminal-friendly multi-section report
   replay.ts                 # Markdown drill-down for a single fingerprint
+  ingest-runner.ts          # Generic per-source ingest pipeline (loop, counters, summary)
   ingest/
-    claude-code.ts          # ~/.claude/projects/*/sessions/*.jsonl parser
+    _shared/
+      jsonl.ts              # parseJsonl(text) + RawLine
+      time.ts               # msToIso(ms)
+      outcome.ts            # inferOutcome(events, ctx) — shared event-stream classifier
+      classify-error.ts     # classifyError(text, extraClasses?) — pattern union
+    claude-code.ts          # ~/.claude/projects/<encoded-cwd>/*.jsonl parser
     opencode.ts             # opencode.db SQLite reader (via sqlite3 CLI subprocess)
+    codex.ts                # ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl parser
+    openclaw.ts             # ~/.openclaw/agents/<id>/sessions/*.jsonl parser
+    aladeen-runs.ts         # <repoRoot>/.aladeen/runs/*.json ExecutionState parser
 ```
 
 Storage on disk:
@@ -65,11 +89,17 @@ SessionIds may contain provider prefixes (`opencode:ses_abc...`). The filesystem
 
 - Claude Code ingester: complete
 - opencode ingester: complete
-- Codex ingester: not yet
-- Gemini CLI ingester: not yet
-- Aladeen's own blueprint runs → trace store: not yet
+- Codex ingester: complete
+- OpenClaw ingester: complete (fixture-validated; real-vault smoke test pending)
+- Aladeen's own blueprint runs → trace store: complete
+- Hermes ingester: planned (gated on `~/.hermes/state.db` schema inspection)
+- Gemini CLI ingester: planned (gated on confirming actual storage path)
+- jcode ingester: planned (gated on upstream-repo inspection)
+- MCP server bundle: planned
 
-The blueprint engine that originally lived here (DAG runner, deterministic + agentic nodes, worktree isolation) is still in `src/engine/`, `src/blueprints/`, `src/isolation/`, and `src/adapters/`. It's been demoted from the project identity but is kept runnable because the runs it produces are the eventual third data source. See `~/.claude/projects/N--Aladeen/memory/project_pivot_observability.md` for the full pivot rationale.
+See `ROADMAP.md` for the full plan, including the canonical ingester contract and distribution channels.
+
+The blueprint engine that originally lived here (DAG runner, deterministic + agentic nodes, worktree isolation) is still in `src/engine/`, `src/blueprints/`, `src/isolation/`, and `src/adapters/`. It's been demoted from the project identity but is kept runnable because the runs it produces are training data for the observability layer.
 
 ## Known limits
 
@@ -86,4 +116,4 @@ The blueprint engine that originally lived here (DAG runner, deterministic + age
 
 ## License
 
-Personal project. No license claimed yet.
+MIT. See `LICENSE`.
