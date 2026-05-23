@@ -20,6 +20,8 @@ export const SOURCE_KINDS = [
   'codex-transcript',
   'gemini-cli-log',
   'aladeen-execution-state',
+  'openclaw-session',
+  'hermes-session',
 ] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 

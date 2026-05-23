@@ -17,6 +17,7 @@ import { ClaudeCodeIngester } from './observability/ingest/claude-code.js';
 import { OpencodeIngester } from './observability/ingest/opencode.js';
 import { AladeenRunsIngester } from './observability/ingest/aladeen-runs.js';
 import { CodexIngester } from './observability/ingest/codex.js';
+import { OpenClawIngester } from './observability/ingest/openclaw.js';
 import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
 import { replayFingerprint } from './observability/replay.js';
@@ -256,8 +257,8 @@ program
 
 program
   .command('ingest <source>')
-  .description('Ingest agent CLI session logs (supported: claude-code, opencode)')
-  .option('--path <path>', 'For claude-code: .jsonl file or project dir (default: ~/.claude/projects/<encoded-cwd>). For opencode: path to opencode.db (default: ~/.local/share/opencode/opencode.db)')
+  .description('Ingest agent CLI session logs (supported: claude-code, opencode, codex, openclaw, aladeen-runs)')
+  .option('--path <path>', 'Source-specific path override. Defaults: claude-code=~/.claude/projects/<encoded-cwd>; opencode=~/.local/share/opencode/opencode.db; codex=~/.codex/sessions; openclaw=~/.openclaw; aladeen-runs=<repoRoot>/.aladeen/runs')
   .option('--repo-root <path>', 'Repository root for storage', process.cwd())
   .option('--quiet', 'Suppress per-session output')
   .action(async (
@@ -332,6 +333,26 @@ program
       return;
     }
 
+    if (source === 'openclaw') {
+      const ingester = new OpenClawIngester();
+      const rootPath = opts.path ?? path.join(os.homedir(), '.openclaw');
+      const sources = await ingester.listSessions(rootPath);
+      if (sources.length === 0) {
+        console.error(`No session files found at ${path.join(rootPath, 'agents', '<id>', 'sessions')}`);
+        process.exit(1);
+      }
+      await runIngestPipeline({
+        sourceLabel: 'openclaw',
+        sourcePath: rootPath,
+        targets: sources,
+        ingestOne: (s) => ingester.ingestFile(s),
+        displayId: (s, result) => result?.trace.sessionId ?? `openclaw:${s.sessionId}`,
+        storage,
+        quiet: opts.quiet,
+      });
+      return;
+    }
+
     if (source === 'aladeen-runs') {
       const ingester = new AladeenRunsIngester();
       const runsDir = opts.path ?? path.join(opts.repoRoot, '.aladeen', 'runs');
@@ -354,7 +375,7 @@ program
       return;
     }
 
-    console.error(`Unknown ingest source "${source}". Supported: claude-code, opencode, codex, aladeen-runs`);
+    console.error(`Unknown ingest source "${source}". Supported: claude-code, opencode, codex, openclaw, aladeen-runs`);
     process.exit(1);
   });
 
