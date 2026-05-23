@@ -40,11 +40,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "TODO: set to git+https://github.com/<org>/aladeen.git before first publish"
+    "url": "git+https://github.com/naqeebali-shamsi/Aladeen.git"
   },
-  "homepage": "TODO: set to https://github.com/<org>/aladeen#readme before first publish",
+  "homepage": "https://github.com/naqeebali-shamsi/Aladeen#readme",
   "bugs": {
-    "url": "TODO: set to https://github.com/<org>/aladeen/issues before first publish"
+    "url": "https://github.com/naqeebali-shamsi/Aladeen/issues"
   },
   "dependencies": {
     "@types/cross-spawn": "^6.0.6",
