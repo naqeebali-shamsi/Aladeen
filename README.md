@@ -28,6 +28,31 @@ aladeen report                      # show failure-pattern buckets across all in
 aladeen replay <fingerprint>        # drill into a single bucket: files touched, asks, first failures
 ```
 
+## MCP server (in-session queries from any agent)
+
+Once you've ingested some sessions, Aladeen also ships as an **MCP server** so any MCP-aware agent (Claude Code, opencode, Codex, Cursor, etc.) can query the accumulated knowledge mid-session — no context switch, no CLI invocation.
+
+Add this to a project's `.mcp.json` (or your global MCP config):
+
+```json
+{
+  "mcpServers": {
+    "aladeen": {
+      "command": "aladeen-mcp"
+    }
+  }
+}
+```
+
+The server runs locally over stdio, reads `<cwd>/.aladeen/ingested/`, and exposes:
+
+- **Tool** `query_failure_patterns({ all?, limit? })` — the same report `aladeen report` produces
+- **Tool** `replay_fingerprint({ fingerprint, max_sessions? })` — markdown drill-down for one bucket
+- **Resource** `aladeen://digests` — JSON of every stored `RunDigest`
+- **Resource** `aladeen://sessions/{sessionId}` — full `SessionTrace` for one session
+
+The server never touches the network and never launches an agent. It only reads what prior `aladeen ingest <source>` runs wrote to disk.
+
 A single `aladeen report` gives you:
 
 - **Outcomes** — how many sessions completed cleanly, errored, or were silently abandoned (dangling tool calls detected, not just "exit code zero")
@@ -92,10 +117,10 @@ SessionIds may contain provider prefixes (`opencode:ses_abc...`). The filesystem
 - Codex ingester: complete
 - OpenClaw ingester: complete (fixture-validated; real-vault smoke test pending)
 - Aladeen's own blueprint runs → trace store: complete
+- MCP server bundle: complete (`aladeen-mcp` bin; 2 tools + 2 resources)
 - Hermes ingester: planned (gated on `~/.hermes/state.db` schema inspection)
 - Gemini CLI ingester: planned (gated on confirming actual storage path)
 - jcode ingester: planned (gated on upstream-repo inspection)
-- MCP server bundle: planned
 
 See `ROADMAP.md` for the full plan, including the canonical ingester contract and distribution channels.
 

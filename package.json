@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "aladeen": "dist/cli.js"
+    "aladeen": "dist/cli.js",
+    "aladeen-mcp": "dist/mcp/cli.js"
   },
   "files": [
     "dist",
@@ -47,6 +48,7 @@
     "url": "https://github.com/naqeebali-shamsi/Aladeen/issues"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/cross-spawn": "^6.0.6",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
