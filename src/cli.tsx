@@ -22,6 +22,7 @@ import { OpenClawIngester } from './observability/ingest/openclaw.js';
 import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
 import { replayFingerprint } from './observability/replay.js';
+import { suggestRemedy } from './observability/remedy.js';
 import { runIngestPipeline } from './observability/ingest-runner.js';
 
 const program = new Command();
@@ -408,6 +409,26 @@ program
       maxDeepLoad: Number.isFinite(max) ? max : 10,
     });
     if (result.matchedDigests.length === 0) {
+      console.error(result.markdown);
+      process.exit(1);
+    }
+    console.log(result.markdown);
+  });
+
+program
+  .command('remedy <fingerprint>')
+  .description('Suggest a read-only remedy for a failing fingerprint: a known-fix pointer when the shape is a solved bug, else prior sessions of the same shape that later completed. Suggests, never executes.')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .option('--max-samples <n>', 'Max resolved siblings to deep-load for evidence', '3')
+  .action(async (fp: string, opts: { repoRoot: string; maxSamples: string }) => {
+    const storage = new IngestStorage(opts.repoRoot);
+    const max = Number.parseInt(opts.maxSamples, 10);
+    const result = await suggestRemedy(fp, storage, {
+      maxResolvedSamples: Number.isFinite(max) ? max : 3,
+    });
+    // No bucket matched at all → error exit (mirrors `replay`). A matched bucket
+    // with tier 'none' is a valid, successful answer (prints the honest no-remedy markdown).
+    if (result.failingDigests.length === 0) {
       console.error(result.markdown);
       process.exit(1);
     }

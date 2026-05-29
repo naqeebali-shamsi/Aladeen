@@ -212,6 +212,11 @@ describe('MCP server', () => {
       expect(r.structuredContent.tier).toBe('known-fix');
       expect(r.structuredContent.ruleCount).toBeGreaterThanOrEqual(1);
       expect(r.content[0].text).toContain('install dependencies inside the git worktree');
+      // Machine-actionable structured form (agent can act without scraping markdown).
+      expect(r.structuredContent.rules[0].id).toBe('worktree_collision');
+      expect(r.structuredContent.rules[0].citations[0].file).toContain('implement-feature.ts');
+      expect(typeof r.structuredContent.guardrail).toBe('string');
+      expect(r.structuredContent.nFailed).toBeGreaterThanOrEqual(1);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

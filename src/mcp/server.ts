@@ -145,11 +145,34 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
       });
       return {
         content: [{ type: 'text', text: result.markdown }],
+        // Machine-actionable structured form so a calling agent can act WITHOUT scraping the
+        // markdown. Still suggestion-only: known-fix rules expose their headline/remedy/citations
+        // (the agent reads the cited file and applies the analogous fix in ITS own session);
+        // resolved siblings expose change-shaped evidence ONLY (path + line counts + sha, never
+        // file content). Aladeen does not execute anything.
         structuredContent: {
           fingerprint: result.fingerprint,
           tier: result.tier,
+          subSignature: result.subSignature,
+          guardrail: result.guardrail,
+          nFailed: result.nFailed,
+          nResolved: result.nResolved,
           ruleCount: result.ruleMatches.length,
+          rules: result.ruleMatches.map((r) => ({
+            id: r.id,
+            headline: r.headline,
+            remedyText: r.remedyText,
+            citations: r.citations,
+          })),
           resolvedSampleCount: result.resolvedSiblings.length,
+          resolvedSiblings: result.resolvedSiblings.map((s) => ({
+            sessionId: s.sessionId,
+            ask: s.ask,
+            sharedTools: s.sharedTools,
+            sharedFiles: s.sharedFiles,
+            changeShaped: s.changeShaped,
+            hasFileTelemetry: s.hasFileTelemetry,
+          })),
         },
         isError: result.failingDigests.length === 0,
       };

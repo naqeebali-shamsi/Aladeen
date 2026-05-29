@@ -28,6 +28,7 @@ aladeen ingest openclaw             # parse ~/.openclaw/agents/<id>/sessions/*.j
 aladeen ingest aladeen-runs         # parse <repo>/.aladeen/runs/*.json (Aladeen's own runs)
 aladeen report                      # show failure-pattern buckets across all ingested sessions
 aladeen replay <fingerprint>        # drill into a single bucket: files touched, asks, first failures
+aladeen remedy <fingerprint>        # suggest a read-only remedy: known-fix pointer or prior resolved sessions
 ```
 
 ## MCP server (in-session queries from any agent)
