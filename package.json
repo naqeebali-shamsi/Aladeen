@@ -19,7 +19,8 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.tsx",
-    "build": "tsc",
+    "dashboard": "tsx src/cli.tsx dashboard",
+    "build": "tsc && node scripts/copy-dashboard-web.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "test": "vitest run",
