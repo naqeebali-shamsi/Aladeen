@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { delimiter, extname, isAbsolute, join } from 'node:path';
+import { delimiter, extname, isAbsolute, join, posix, win32 } from 'node:path';
 
 /**
  * Resolve a CLI binary name to an absolute path on Windows.
@@ -20,6 +20,10 @@ export function resolveBinary(name: string): string {
   const cached = cache.get(name);
   if (cached !== undefined) return cached;
 
+  // Keep the original spawn-time semantics: on non-Windows this is a bare-name passthrough (spawn
+  // resolves PATH at exec time, honoring the executable bit). findBinaryWith — which eagerly
+  // existsSync-resolves on every platform — is reserved for preflight (findBinary), where a missing
+  // install must surface as null rather than a hopeful bare name.
   const resolved = resolveBinaryWith(
     name,
     process.platform,
@@ -29,6 +33,22 @@ export function resolveBinary(name: string): string {
   );
   cache.set(name, resolved);
   return resolved;
+}
+
+/**
+ * Resolve a CLI binary only when it exists on PATH.
+ *
+ * This is for preflight checks, where returning the bare command name would
+ * hide a real missing-install blocker.
+ */
+export function findBinary(name: string): string | null {
+  return findBinaryWith(
+    name,
+    process.platform,
+    (process.env['PATH'] ?? '').split(delimiter),
+    parsePathExt(process.env['PATHEXT']),
+    existsSync,
+  );
 }
 
 /** Test seam: pure function, no I/O outside the supplied `exists` callback. */
@@ -55,6 +75,31 @@ export function resolveBinaryWith(
   }
   // Fallback: let spawn fail naturally so the error message stays familiar.
   return name;
+}
+
+/** Test seam for preflight checks: returns null instead of a fallback name. */
+export function findBinaryWith(
+  name: string,
+  platform: NodeJS.Platform,
+  pathDirs: string[],
+  pathExts: string[],
+  exists: (p: string) => boolean,
+): string | null {
+  if (extname(name) !== '' || isAbsolute(name) || name.includes('/') || name.includes('\\')) {
+    return exists(name) ? name : null;
+  }
+
+  const candidateExts = platform === 'win32' ? pathExts : [''];
+  const joinPath = platform === 'win32' ? win32.join : posix.join;
+  for (const dir of pathDirs) {
+    if (!dir) continue;
+    for (const ext of candidateExts) {
+      const candidate = joinPath(dir, name + ext);
+      if (exists(candidate)) return candidate;
+    }
+  }
+
+  return null;
 }
 
 function parsePathExt(raw: string | undefined): string[] {
