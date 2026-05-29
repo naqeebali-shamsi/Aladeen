@@ -149,4 +149,35 @@ describe('OpencodeIngester.ingestSession', () => {
     const out = await ingester.listSessions('/fake/db');
     expect(out).toEqual([baseSession]);
   });
+
+  it('classifies a message-level provider error as errored and emits a fatal error event', async () => {
+    const oldSession = { ...baseSession, time_updated: 1_700_000_000_000 };
+    const sqlExec = makeSqlExec({
+      message: [
+        { id: 'msg_a', time_created: 1_700_000_002_000, time_updated: 1_700_000_002_000,
+          data: JSON.stringify({
+            role: 'assistant', modelID: 'llama3',
+            error: { name: 'ProviderAuthError', data: { message: '401 Unauthorized: invalid api key' } },
+          }) },
+      ],
+      part: [
+        { id: 'p1', message_id: 'msg_a', time_created: 1_700_000_002_000,
+          data: JSON.stringify({ type: 'text', text: 'attempting...' }) },
+      ],
+    });
+    const ingester = new OpencodeIngester({
+      scrubber: new Scrubber({ homeDir: '/home/test' }),
+      sqlExec,
+    });
+    const result = await ingester.ingestSession('/fake/db', oldSession);
+
+    // Rule 3: a failed assistant turn (provider/model error) classifies as errored.
+    expect(result.trace.outcome).toBe('errored');
+    const err = result.trace.events.find((e) => e.kind === 'error');
+    expect(err).toBeDefined();
+    if (err?.kind === 'error') {
+      expect(err.fatal).toBe(true);
+      expect(err.errorClass).toBe('auth');
+    }
+  });
 });

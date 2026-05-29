@@ -140,4 +140,48 @@ describe('ClaudeCodeIngester.ingestText', () => {
 
     expect(result.trace.events.some((e) => e.kind === 'user_message')).toBe(true);
   });
+
+  it('classifies a fatal API-error turn as errored and emits a fatal error event', () => {
+    const text = jsonl([
+      { type: 'user', timestamp: '2026-05-19T10:00:00.000Z', message: { role: 'user', content: 'do it' } },
+      { type: 'assistant', timestamp: '2026-05-19T10:00:01.000Z', isApiErrorMessage: true, message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'API Error: 429 Too Many Requests' }],
+      }},
+    ]);
+
+    const ingester = new ClaudeCodeIngester(new Scrubber({ homeDir: '/home/test' }));
+    const result = ingester.ingestText(text, {
+      sessionId: 'sess-5',
+      filePath: '/tmp/x/sess-5.jsonl',
+    }, { mtime: new Date('2026-01-01T00:00:00.000Z') });
+
+    // Rule 3: an explicit fatal-error turn classifies as errored (not 'completed').
+    expect(result.trace.outcome).toBe('errored');
+    const err = result.trace.events.find((e) => e.kind === 'error');
+    expect(err).toBeDefined();
+    if (err?.kind === 'error') {
+      expect(err.fatal).toBe(true);
+      expect(err.errorClass).toBe('rate_limit');
+      expect(err.message).toContain('429');
+    }
+    // The API-error turn is consumed as an error event, not re-surfaced as an agent_message.
+    expect(result.trace.events.some((e) => e.kind === 'agent_message')).toBe(false);
+  });
+
+  it('classifies a fatal system-level error (level:error) as errored', () => {
+    const text = jsonl([
+      { type: 'user', timestamp: '2026-05-19T10:00:00.000Z', message: { role: 'user', content: 'go' } },
+      { type: 'system', level: 'error', timestamp: '2026-05-19T10:00:02.000Z', content: 'ENOSPC: no space left on device' },
+    ]);
+
+    const ingester = new ClaudeCodeIngester(new Scrubber({ homeDir: '/home/test' }));
+    const result = ingester.ingestText(text, {
+      sessionId: 'sess-6',
+      filePath: '/tmp/x/sess-6.jsonl',
+    }, { mtime: new Date('2026-01-01T00:00:00.000Z') });
+
+    expect(result.trace.outcome).toBe('errored');
+    expect(result.trace.events.some((e) => e.kind === 'error' && e.fatal)).toBe(true);
+  });
 });
