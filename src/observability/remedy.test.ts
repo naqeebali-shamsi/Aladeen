@@ -117,6 +117,19 @@ describe('suggestRemedy — none / suppression', () => {
     expect(r.tier).toBe('none');
   });
 
+  it('16. directly-queried completed bucket → none with n_failed=0 (never mislabels completions as failed)', async () => {
+    // Regression: the evidence tier keys only on sub-signature + resolved siblings, so a COMPLETED
+    // bucket queried directly used to surface a low/medium tier whose n_failed=N counted sessions
+    // that did not fail. GATE 0 now suppresses it to none with an honest zero failure-count.
+    const completedQueried = d({ sessionId: 'cq', outcome: 'completed', errorCounts: { tool_error: 2 }, patternFingerprint: 'fp_completed_q' });
+    const completedSibling = d({ sessionId: 'cs', outcome: 'completed', errorCounts: { tool_error: 1 }, patternFingerprint: 'fp_completed_sib' });
+    const r = await suggestRemedy('fp_completed_q', fakeStorage([completedQueried, completedSibling]));
+    expect(r.tier).toBe('none');
+    expect(r.nFailed).toBe(0);
+    expect(r.resolvedSiblings).toHaveLength(0);
+    expect(r.markdown).toContain('n_failed=0');
+  });
+
   it('14. unknown fingerprint → empty bucket, none tier, no-match markdown', async () => {
     const r = await suggestRemedy('does-not-exist', fakeStorage([d({ patternFingerprint: 'other' })]));
     expect(r.failingDigests).toEqual([]);

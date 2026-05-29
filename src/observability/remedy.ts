@@ -155,9 +155,10 @@ function isFailureOutcome(o: SessionOutcome): boolean {
 }
 
 // A RESOLVED sibling is any completed session that carries error semantics (non-empty
-// subSignature). We do NOT require toolFailureCount===0 — that gate plus the non-empty-subSignature
-// gate is mutually exclusive (digest.ts only increments errorCounts on tool_result !ok), which
-// kills the tier. 'running' is excluded (outcome !== 'completed'); failure outcomes excluded.
+// subSignature). We deliberately do NOT also require toolFailureCount===0: digest.ts increments
+// errorCounts on BOTH failed tool_results AND `error` events, so a genuinely resolved session can
+// finish 'completed' yet still carry a non-empty subSignature — requiring zero tool failures would
+// wrongly exclude those. 'running' is excluded (outcome !== 'completed'); failure outcomes excluded.
 function isResolved(d: RunDigest): boolean {
   return d.outcome === 'completed' && subSignature(d) !== '';
 }
@@ -221,6 +222,17 @@ export async function suggestRemedy(
     return finalize({
       fingerprint, failingDigests, subSignature: sig, tier: 'known-fix',
       ruleMatches, resolvedSiblings: [], nFailed, nResolved: 0, coverageNote, maxExcerpt,
+    });
+  }
+
+  // GATE 0: a non-failing bucket (e.g. a directly-queried `completed` fingerprint) has nothing to
+  // remediate. The evidence tier below keys only on sub-signature + resolved siblings, so without
+  // this guard a completed bucket would surface a low/medium tier whose `n_failed=N` denominator
+  // counts sessions that did NOT fail — dishonest. Mirror the known-fix guard; report zero failures.
+  if (!bucketIsFailure) {
+    return finalize({
+      fingerprint, failingDigests, subSignature: sig, tier: 'none',
+      ruleMatches: [], resolvedSiblings: [], nFailed: 0, nResolved: 0, coverageNote, maxExcerpt,
     });
   }
 
