@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# Aladeen pre-commit secret scan. Zero-dependency: activated by the package.json
+# "prepare" script (git config core.hooksPath .githooks) — no husky needed.
+#
+# Degrades gracefully: if gitleaks isn't installed it WARNS and lets the commit
+# through (CI is the bypass-proof backstop). Install: `winget install gitleaks`
+# (Windows) / `brew install gitleaks` (macOS) / release tarball (Linux).
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact --config .gitleaks.toml --no-banner; then
+    echo ""
+    echo "[aladeen] gitleaks blocked this commit — a secret-shaped string is staged."
+    echo "  If it is a genuine test fixture, construct it at runtime (see scrubber.test.ts)"
+    echo "  or add it to the .gitleaks.toml allowlist. Use --no-verify only if you are certain."
+    exit 1
+  fi
+else
+  echo "[aladeen] gitleaks not on PATH — skipping local secret scan (CI still scans). Install: https://github.com/gitleaks/gitleaks"
+fi

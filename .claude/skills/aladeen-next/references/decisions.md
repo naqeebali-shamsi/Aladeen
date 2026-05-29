@@ -44,3 +44,111 @@ only its `Status:` line — do not delete or reorder.
 **Signals consulted:** roadmap gaps, god-node coverage (graphify), prior decisions (both #1 and #2 completed — no de-dup needed), recent commits (last 24h = heavy test additions; weighted down to avoid piling more tests in the same areas).
 
 **Notes:** Roadmap M4 now fully green (3/3 metrics backed). The decisions log is starting to show a signal: picks rooted in roadmap metrics produce high-certainty wins (M4-2 and M4-3 both landed clean, no bugs surfaced). Graph-fragility picks are higher variance — they surface bugs (pick #1) but sometimes those bugs eat the time budget.
+
+---
+
+## 2026-04-22 — 2 picks (third invocation)
+
+**Picks:**
+
+1. **Tests for `agentic-executor.ts` (the deferred pick)** (score: 5) — `Status: completed (commit 080614a)` — added `src/engine/agentic-executor.test.ts` with 10 tests: `resolveTemplate` (3 cases incl. JSON-stringify for non-strings), `injectContext` (section ordering + no-op pass-through), `toNodeResult` decision branches (success, timeout→failure, exit>0→retry, unknown adapter→failure without detector call), and an E2E assertion that `{{store.lintOutput}}` reaches the detector. Exported `resolveTemplate` and `injectContext` as pure helpers — no behavioral change. Stubs via `vi.spyOn(CompletionDetector.prototype, 'execute')`. All 50 suite tests pass; typecheck clean. No bugs surfaced — the decision logic was correct as written.
+   - Rationale: explicitly deferred from invocation #2; still zero test references to `AgenticExecutor`, `toNodeResult`, `resolveTemplate`, or `injectContext` (verified via grep on `**/*.test.ts`). This file owns the retry-vs-failure decision on every agentic run (`src/engine/agentic-executor.ts:113-114` — exit-code/timeout branch) and the `{{store.key}}` template path that feeds fix-lint-style loops. Untested decision logic on the hot path.
+   - Evidence: `src/engine/agentic-executor.ts` (170 lines, no test file); graphify marks it a god-node; smoke-agentic runs (`c607e199`, `31101d50`) exercise this file end-to-end in prod.
+   - Acceptance: `src/engine/agentic-executor.test.ts` exists with ≥4 tests — (a) `resolveTemplate` replaces `{{store.key}}` and passes through missing keys, (b) `toNodeResult` maps `success=true → success`, (c) `toNodeResult` maps timeout error → `failure` (not retry), (d) `toNodeResult` maps exit>0 non-timeout → `retry`. Stub the `CompletionDetector` via DI or module mock.
+   - Effort: small-medium (~45min).
+
+2. **End-to-end test for M1 acceptance metric: "100% of runs include policy metadata"** (score: 4) — `Status: completed (commit 1bcf27b)` — added 5 tests to `runner.test.ts`: explicit `runMode='local-only'` → mode/cloudFallbackAllowed asserted; default (no runMode) same safe default; `runMode='hybrid'` exercises the `cloudFallbackAllowed = runMode !== 'local-only'` branch; blueprint-level `maxRunDurationMs`/`maxTotalRetries` propagate into runPolicy; escalated run still carries runPolicy (the metric applies to ALL runs, not just completed). All 55 tests pass; typecheck clean. No runner changes — contract was correct as written. M1 is now test-backed end-to-end.
+   - Rationale: `runner.ts:122-123` populates `state.runPolicy` but no test asserts a completed run actually has it set. `state.test.ts` only round-trips a hand-crafted state with `runPolicy` pre-attached — that validates persistence, not the runner's contract. The M1 metric is today unfalsifiable from the test suite.
+   - Evidence: `src/engine/runner.ts:43,63,71,122-123` (runMode wiring); `src/engine/state.test.ts:27,35,77,82` (only uses pre-populated runPolicy); `LOCAL_FIRST_DELIVERY_ROADMAP.md:10` (metric).
+   - Acceptance: new test in `runner.test.ts` runs a trivial blueprint with `runMode: 'local-only'`, asserts `finalState.runPolicy.mode === 'local-only'` and `cloudFallbackAllowed === false`. Repeat with default (no runMode) asserting a safe default is still set.
+   - Effort: small (~20min).
+
+**Picks considered but dropped:**
+
+- Drift sample for `second-real-agentic-run-success` — still open in postrun, but needs 3+ new samples and each costs a real agentic run; cost > value in a session.
+- Tests for `src/adapters/base.ts` — abstract PTY shim, no decision logic; score < 3.
+- Tests for `local-runner-options.ts` — pure factory with env-var branches; score ≈ 2.
+
+**Signals consulted:** prior decisions (deferred pick #2 still open), god-node coverage (graphify), roadmap milestones M1–M5, open postrun patterns, recent commits (last 48h = mostly test/docs; weighted accordingly), source-vs-test file map.
+
+**Notes:** Roadmap M1, M2, M3, M4 all turn out to be code-backed — the remaining gaps are *test-backed* not *code-backed*. That's a meaningful shift in the signal landscape and argues for raising the weight of "acceptance metric has code but no asserting test" relative to "acceptance metric unimplemented." Not adjusting the SKILL.md weights yet — one observation isn't enough; flagging for the next invocation to confirm.
+
+---
+
+## 2026-04-22 — 1 pick (fourth invocation)
+
+**Picks:**
+
+1. **Structural tests for `createImplementFeatureLocalBlueprint` (roadmap M2)** (score: 4) — `Status: completed (commit 112a2da)` — added `src/blueprints/implement-feature.test.ts` with 5 assertions: `validateBlueprint` passes (M2-1); gate nodes `{typecheck, lint, test, verify-branch}` all present (M2-2); zero nodes with `op.type='git' && op.action='push'` (M2-3 "no remote push" pinned); `maxDurationMs` + `maxTotalRetries` both declared (M2-4 bounded-time); lint→fix-lint→lint and test→fix-tests→test feedback edges wired. No factory changes — contract was correct as written. Full suite 60/60 pass, typecheck clean. Second consecutive clean-landing "M-metric has code, no test asserts it" pick — pattern holding.
+   - Rationale: M2 has two unasserted acceptance metrics — "Blueprint validates with `validateBlueprint`" and "Remove default remote push from local-only flow." Code exists (`src/blueprints/implement-feature.ts:13`) and is wired into the `run-local-feature` CLI (`src/cli.tsx:74,84`), but zero tests reference `createImplementFeatureLocalBlueprint`. Same signal shape as invocation #3 pick #2 (M1 runPolicy) — which landed clean and caught zero bugs; supports the "code-backed but test-unasserted" hypothesis flagged in invocation #3 notes.
+   - Evidence: grep `createImplementFeatureLocalBlueprint|implement-feature-local` on `**/*.test.ts` → 0 matches. Factory produces 14 nodes + 16 edges; docstring at `implement-feature.ts:6-8` lists a `commit -> push -> cleanup` flow, but no `push` node exists (good — matches M2) — the drift is latent and only a test would pin it.
+   - Acceptance: `src/blueprints/implement-feature.test.ts` with ≥4 assertions — (a) `validateBlueprint(bp).valid === true`; (b) deterministic gate nodes `{typecheck, lint, test, verify-branch}` all present; (c) no node has `op.type === 'git' && op.action === 'push'` (enforces the M2 "no remote push" metric); (d) `maxDurationMs` and `maxTotalRetries` set on the blueprint.
+   - Effort: small (~20min).
+
+**Picks considered but dropped:**
+
+- Tests for `LocalContextAssembler.assemble()` (score: 3) — touches `git status`/`git diff` + filesystem + env-var, real logic but moderate value; not essential to any acceptance metric. Hold for a future invocation.
+- Drift sample for `second-real-agentic-run-success` — still 1 observation in postrun; needs 2–3 more real agentic runs, each costs minutes + real Claude API calls. Cost > value in a session.
+- Tests for `src/adapters/{base,claude,codex,gemini}.ts` — PTY shims for the interactive TUI path, not the agentic hot path (which is `completion.ts`, already tested). Score < 3.
+
+**Signals consulted:** prior decisions (both picks from invocation #3 completed — no de-dup needed), roadmap milestones, source-vs-test file map, open postrun patterns (1, unchanged), recent commits (last 72h = only test additions — weighted down to avoid piling on).
+
+**Notes:** Second consecutive observation of "M-metric has code, no test asserts it." After pick #1 lands cleanly, this will be 2/2 clean wins from this signal — enough to consider bumping its weight in SKILL.md during invocation #5.
+
+---
+
+## 2026-04-23 — 2 picks (fifth invocation)
+
+**Picks:**
+
+1. **Wire `bucketFailures` into a CLI surface** (score: 4 by analogy) — `Status: completed (commit c7c4ea6)` — added `aladeen failure-patterns` command that loads runs via `StatePersistence.list()`, calls `bucketFailures()`, and prints buckets sorted by count with sample run IDs and a truncated error per bucket. Handles the three empty cases (no runs, all-completed, no failures). 3 new subprocess tests in `cli.test.ts`. Verified on live data: the 8 persisted runs yield `[2×] abandoned at run-level` with sample runs `690cbbfe`, `b9428fa6` — the two historical orphans correctly surface as the dominant pattern. 74/74 suite pass. The orphan-utility signal (not in the rubric) produced a clean-landing pick — strengthens the case for adding a "Tested utility with no production callers" row.
+   - Rationale: Brand-new finding this invocation. `src/engine/failure-buckets.ts` exports `bucketFailures()` with full test coverage (6 tests in `failure-buckets.test.ts`), but grep on `src/**/*.ts` (excluding tests) shows ZERO callers — `cli.tsx`, `runner.ts`, `state.ts` all ignore it. The function was built to back M4 metric "Failure reasons are structured enough to bucket by gate/outcome" — and it does, in a strict reading — but the buckets never reach the developer. M4 is technically green; the metric is hollow in practice.
+   - Evidence: grep `bucketFailures` `src/**/*.ts` → 2 hits (the file + its test), no callers. Live data: 8 persisted runs, 2 of which are `abandoned` orphans (`690cbbfe`, `b9428fa6`) — the bucket function would surface them as the dominant pattern but no command does.
+   - Acceptance: new CLI command `aladeen failure-patterns` (or `list-runs --buckets`) loads `.aladeen/runs/*.json`, calls `bucketFailures()`, prints buckets sorted by count with sample run IDs and truncated error snippets. New subprocess test in `src/cli.test.ts` asserts exit 0 and that the abandoned-bucket appears.
+   - Effort: small (~30min).
+   - Caveat: doesn't strictly fit any row in the weight table — closest analog is "hot code area without surface" rather than "without tests." Surfacing as a pick because the practical leverage is real (turns dead utility into developer-facing intelligence) even if the rubric doesn't see it.
+
+2. **TUI retry-counter test (M3 metric: "TUI shows retry counters and current node status transitions")** (score: 4) — `Status: completed (commit 6fca6e6)` — refactored `src/tui/BlueprintView.tsx` to extract a presentational `BlueprintFrame` named export (same JSX, no behavior change) so the visual contract can be tested without spawning a real runner. Added `src/tui/BlueprintView.test.tsx` with 6 tests via `ink-testing-library`: per-node "(attempt N)" counter, global "N retries" counter from totalRetries, current-node "<-" arrow, ESCALATED status + escalationReason, progress reads completedCount/totalNodes, null-state pre-runner render. Broadened vitest include from `.test.ts` → `.test.{ts,tsx}`. Suite 80/80, typecheck clean. Closes the last unasserted M-metric — M3 fully test-backed (4/4 picks of the "code-backed but no asserting test" pattern have now landed clean).
+   - Rationale: Last unasserted M3 acceptance metric. Same pattern as M1/M2/M3 picks that all landed clean (3/3). Tests the BlueprintView component renders retry counts + node status from a synthetic ExecutionState.
+   - Evidence: `src/tui/BlueprintView.tsx` exists and is wired into `src/tui/App.tsx`, but grep on `**/*.test.tsx` and `**/*.test.ts` for `BlueprintView` → 0 matches. M3 metric explicitly references TUI behavior.
+   - Acceptance: `src/tui/BlueprintView.test.tsx` using `ink-testing-library` (new devDep ~5MB), renders the component with a state showing one node at `attempts: 3, status: 'running'`, asserts the rendered frame contains the count and status string.
+   - Effort: medium (~60min — includes ink-testing-library setup).
+
+**Picks considered but dropped:**
+
+- Drift sample for `second-real-agentic-run-success` — still 1 obs, unchanged in postrun, real-run cost unchanged. Hold.
+- Tests for `LocalContextAssembler.assemble()` — dropped twice now; if it surfaces a third time as a candidate, take it; otherwise it's not pulling its weight as a signal.
+- M5 stabilization (lint + docs) — not really test-shaped; lint is a CI concern, docs is wordsmithing.
+
+**Signals consulted:** prior decisions (all 5 prior picks completed), source-vs-test file map, source-vs-caller map (new this round — surfaced the bucketFailures orphan), open postrun patterns (1, unchanged), recent commits (last 24h = the M3 pick), roadmap milestones M3 (1 metric still unasserted) + M4 (technically met but hollow).
+
+**Notes:** Two evolutions to flag:
+1. **New signal class discovered**: "Tested utility with no production callers" — found bucketFailures unused. Not in the weights table. If this recurs, propose a row at weight 3 ("hollow metric / dead utility").
+2. **Weight-bump candidate ready**: "M-metric has code but no asserting test" is now 3/3 clean wins (M1 runPolicy, M2 blueprint structure, M3 CLI smoke). The current rubric folds this under "Roadmap milestone metric without code backing" (weight 4) but the two are genuinely distinct. Proposing add a new row "Roadmap metric has code but no asserting test" at weight 4 to SKILL.md. Awaiting user approval before editing the rubric mid-flight.
+
+---
+
+## 2026-05-29 — 2 picks (sixth invocation)
+
+**Picks:**
+
+1. **Pin the dashboard client's pure logic with tests** (score: 6) — `Status: completed (commit 5235d19)` — extracted `renderRemedyCard`+`TIER_LABEL` into `web/remedy-card.js`, flipped `app.js`'s `/lib.js`→`./lib.js`, added `lib.test.ts` (16) + `remedy-card.test.ts` (9). 25 new tests, suite 244/244, browser-verified the card still renders post-refactor. `esc` (XSS guard) + verb-discipline (medium/low never emit "fix") are now pinned in code, not just screenshots. No bug surfaced — the client logic was correct as written. NOTE: the "code-backed surface, no asserting test" signal now extends cleanly from the engine era to the new client surface — 5/5 such picks have landed clean.
+   - Why: the new `src/dashboard/web/` client (`app.js` ~700 lines, `lib.js`) is the largest, hottest, fully-UNTESTED surface in the repo — and it's where two invariants live with no test pinning them: the remedy card's verb-discipline ("fix" appears only on the known-fix tier) and `esc()`, the sole XSS guard for session-derived strings (asks, file paths) injected via `innerHTML`. Server-side remedy markdown IS tested (`remedy.test.ts`); the CARD rendering that a human/agent actually reads is verified only by my manual screenshots. This is the proven "code-backed, no asserting test" signal at a new, large scale.
+   - Evidence: grep `*.test.*` under `src/dashboard/web/` → 0 files (commits f83b4b8, e62464d, 7c7a312 added the client this session); `renderRemedyCard`/`interfaceQuery` in `app.js` enforce verb-discipline + `esc()`; `lib.js esc()` is the only escaping of untrusted session content.
+   - Acceptance: `src/dashboard/web/lib.test.ts` pins `esc` (escapes `<>&"'`), `logWidth` (monotonic, respects min/max), `basename` (win+posix); plus a `renderRemedyCard` test asserting medium/low output has no `\bfix\b` except inside "not a fix", and a sibling `ask` containing `<script>` is escaped. Requires changing `app.js`'s `from '/lib.js'` → `./lib.js` (resolves identically in the browser, becomes importable in vitest).
+   - Effort: medium.
+
+2. **Gemini CLI ingester (roadmap Coverage — big-three completeness)** (score: 4) — `Status: suggested`
+   - Why: Coverage is the roadmap's explicit wedge ("without it nothing else matters"). The dashboard shows codex/claude-code/opencode/aladeen but **no Gemini** — the one big-three provider missing. ROADMAP lists it as a planned shape-1 ingester.
+   - Evidence: `ROADMAP.md` "Next ingesters" table (Gemini CLI, shape 1, ~2h, "gated on confirming actual storage path"); `src/observability/ingest/` has claude-code/codex/opencode/openclaw/aladeen-runs, no `gemini.ts`.
+   - Acceptance: `src/observability/ingest/gemini.ts` produces `SessionTrace` from real Gemini CLI logs + a fixture test; `aladeen ingest gemini` wired in `cli.tsx`.
+   - Caveat: gated on confirming the Gemini CLI on-disk log format/path FIRST (research step). If the format can't be confirmed, this isn't actionable yet.
+   - Effort: medium (+ research).
+
+**Picks considered but dropped:**
+- `second-real-agentic-run-success` drift sample (only open postrun pattern) — dropped for the 5th time; needs ≥3 real agentic runs, and post-pivot Aladeen no longer runs agents, so this is effectively dead. Recommend marking it `resolved (won't-fix: pre-pivot signal)` in learnings.md.
+- Refresh the graphify graph (326 nodes, pre-dashboard/remedy — stale) — weight ~2, below threshold.
+
+**Signals consulted:** open postrun (1, stale/deferred ×5), roadmaps (old M1–M5 fully test-backed; new ROADMAP Coverage gaps), recent runs (8, no new signal — no agentic runs post-pivot), recent git (last 14d = this session's dashboard+remedy+security, all server-side tested, client UNtested), prior decisions (5 invocations, all engine/TUI test picks — zero overlap with the new client surface), source-vs-test map.
+
+**Notes:** Signal-landscape shift — every prior pick targeted the orchestrator-era engine; the whole observability/dashboard/remedy surface added this session is the new frontier, and its CLIENT half is the one piece that escaped the test net. The "code-backed, no asserting test" signal (now 4/4 clean) points straight at it. Non-code item out of scope for a pick: PR #2 (dashboard + actionable replay) is open/unmerged — reviewing/merging it is the obvious Distribution-side next step, but that's the developer's call.

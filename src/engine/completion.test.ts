@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { CLAUDE_CONFIG, CODEX_CONFIG, GEMINI_CONFIG, HEADLESS_CONFIGS } from './completion.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { CLAUDE_CONFIG, CODEX_CONFIG, GEMINI_CONFIG, OPENCODE_CONFIG, HEADLESS_CONFIGS } from './completion.js';
 
 // These tests cover the pure parts of the headless config (buildArgs, parseOutput,
 // parseStreamEvent). Spawn integration is intentionally NOT tested here — that
@@ -143,9 +143,56 @@ describe('GEMINI_CONFIG', () => {
 });
 
 describe('HEADLESS_CONFIGS registry', () => {
-  it('exposes claude, codex, gemini, local-ollama, local-llama-cpp', () => {
+  it('exposes claude, codex, gemini, opencode, local-ollama, local-llama-cpp', () => {
     expect(Object.keys(HEADLESS_CONFIGS).sort()).toEqual(
-      ['claude', 'codex', 'gemini', 'local-llama-cpp', 'local-ollama'].sort()
+      ['claude', 'codex', 'gemini', 'local-llama-cpp', 'local-ollama', 'opencode'].sort()
     );
+  });
+});
+
+describe('OPENCODE_CONFIG', () => {
+  const originalModel = process.env['OPENCODE_MODEL'];
+  afterEach(() => {
+    if (originalModel === undefined) delete process.env['OPENCODE_MODEL'];
+    else process.env['OPENCODE_MODEL'] = originalModel;
+  });
+
+  describe('buildArgs', () => {
+    it('uses `run`, defaults to anthropic/claude-sonnet-4-5, always passes --dangerously-skip-permissions', () => {
+      delete process.env['OPENCODE_MODEL'];
+      const args = OPENCODE_CONFIG.buildArgs('do thing', { cwd: '.' });
+      expect(args).toEqual([
+        'run', 'do thing',
+        '--model', 'anthropic/claude-sonnet-4-5',
+        '--dangerously-skip-permissions',
+      ]);
+    });
+
+    it('respects OPENCODE_MODEL env var (e.g. ollama/qwen2.5-coder:14b)', () => {
+      process.env['OPENCODE_MODEL'] = 'ollama/qwen2.5-coder:14b';
+      const args = OPENCODE_CONFIG.buildArgs('hi', { cwd: '.' });
+      expect(args).toEqual([
+        'run', 'hi',
+        '--model', 'ollama/qwen2.5-coder:14b',
+        '--dangerously-skip-permissions',
+      ]);
+    });
+  });
+
+  describe('parseOutput', () => {
+    it('returns failure with truncated stdout on non-zero exit', () => {
+      const r = OPENCODE_CONFIG.parseOutput('a'.repeat(2000), 2);
+      expect(r.success).toBe(false);
+      expect(r.exitCode).toBe(2);
+      expect(r.error).toMatch(/exited with code 2/);
+      expect(r.error?.length).toBeLessThan(700);
+    });
+
+    it('returns success with trimmed stdout on exit 0', () => {
+      const r = OPENCODE_CONFIG.parseOutput('  Created src/foo.ts.\n', 0);
+      expect(r.success).toBe(true);
+      expect(r.response).toBe('Created src/foo.ts.');
+      expect(r.exitCode).toBe(0);
+    });
   });
 });

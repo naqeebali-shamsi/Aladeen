@@ -1,21 +1,60 @@
 {
   "name": "aladeen",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "description": "Observability and learning layer for agent CLIs (Claude Code, opencode, Codex, OpenClaw). Ingests session logs, classifies failures, replays known-good blueprints.",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "aladeen": "dist/cli.js",
+    "aladeen-mcp": "dist/mcp/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "ROADMAP.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/index.tsx",
-    "build": "tsc",
+    "dashboard": "tsx src/cli.tsx dashboard",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "build": "tsc && node scripts/copy-dashboard-web.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "claude-code",
+    "opencode",
+    "codex",
+    "openclaw",
+    "agent",
+    "agentic",
+    "observability",
+    "session-trace",
+    "failure-analysis",
+    "cli"
+  ],
+  "author": "Naqeebali Shamsi <naeemnh@outlook.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/naqeebali-shamsi/Aladeen.git"
+  },
+  "homepage": "https://github.com/naqeebali-shamsi/Aladeen#readme",
+  "bugs": {
+    "url": "https://github.com/naqeebali-shamsi/Aladeen/issues"
+  },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/cross-spawn": "^6.0.6",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
+    "cross-spawn": "^7.0.6",
     "ink": "^6.8.0",
     "node-pty": "^1.1.0",
     "react": "^19.2.4",
@@ -26,6 +65,7 @@
     "@types/node": "^20.14.2",
     "@types/react": "^19.2.14",
     "eslint": "^9.39.2",
+    "ink-testing-library": "^4.0.0",
     "tsx": "^4.15.1",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.53.0",

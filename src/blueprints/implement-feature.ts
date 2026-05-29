@@ -1,6 +1,14 @@
 import type { Blueprint } from '../engine/types.js';
 
 /**
+ * Default Claude Code tool whitelist for agentic nodes in this blueprint.
+ * Surfaced by the Audex dogfood: without --allowedTools, headless `claude -p`
+ * defaults to read-only/conversational mode in v2.1.x — agents respond but
+ * never write, then exit 0, and the runner marks the node successful.
+ */
+const AGENT_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash'];
+
+/**
  * End-to-end "Implement Feature" blueprint.
  *
  * Flow:
@@ -21,6 +29,8 @@ export function createImplementFeatureLocalBlueprint(params: {
   testArgs?: string[];
   lintCommand?: string;
   lintArgs?: string[];
+  typecheckCommand?: string;
+  typecheckArgs?: string[];
   /** Install CLI in worktree before gates (default: npm install). */
   installCommand?: string;
   installArgs?: string[];
@@ -36,6 +46,8 @@ export function createImplementFeatureLocalBlueprint(params: {
     testArgs = ['node_modules/typescript/lib/tsc.js', '--noEmit'],
     lintCommand = 'node',
     lintArgs = ['node_modules/typescript/lib/tsc.js', '--noEmit'],
+    typecheckCommand = 'node',
+    typecheckArgs = ['node_modules/typescript/lib/tsc.js', '--noEmit'],
     installCommand = 'npm',
     installArgs = ['install', '--no-audit', '--no-fund'],
   } = params;
@@ -104,9 +116,11 @@ export function createImplementFeatureLocalBlueprint(params: {
         label: 'Implement the requested change',
         kind: 'agentic' as const,
         adapterId,
-        prompt: `You are working in ${worktreePath} on branch ${branch}.\n\nTask:\n${prompt}\n\nTarget paths: ${targetPaths.join(', ')}\n\nImplement the change. Make sure it compiles and follows existing code patterns.`,
+        prompt: `You are working in ${worktreePath} on branch ${branch}.\n\nTask:\n${prompt}\n\nTarget paths: ${targetPaths.join(', ')}\n\nImplement the change. Make sure it compiles and follows existing code patterns. Do not ask for clarification — make your best judgment and write the file(s).`,
         maxRetries: 1,
         timeoutMs: 5 * 60 * 1000,
+        contextOverrides: { allowedTools: AGENT_TOOLS },
+        requiresFileChanges: true,
       },
 
       // Step 5: Typecheck gate
@@ -116,8 +130,8 @@ export function createImplementFeatureLocalBlueprint(params: {
         kind: 'deterministic' as const,
         op: {
           type: 'shell' as const,
-          command: 'node',
-          args: ['node_modules/typescript/lib/tsc.js', '--noEmit'],
+          command: typecheckCommand,
+          args: typecheckArgs,
         },
       },
 
@@ -139,9 +153,11 @@ export function createImplementFeatureLocalBlueprint(params: {
         label: 'Fix lint errors',
         kind: 'agentic' as const,
         adapterId,
-        prompt: 'The linter failed. Look at the lint output in the store under "lint.stderr" and "lint.stdout", fix all type errors and lint issues in the code.',
+        prompt: 'The linter failed. Look at the lint output in the store under "lint.stderr" and "lint.stdout", fix all type errors and lint issues in the code. Do not ask for clarification — make your best judgment and edit the file(s).',
         maxRetries: 1,
         timeoutMs: 3 * 60 * 1000,
+        contextOverrides: { allowedTools: AGENT_TOOLS },
+        requiresFileChanges: true,
       },
 
       // Step 8: Run tests
@@ -162,9 +178,11 @@ export function createImplementFeatureLocalBlueprint(params: {
         label: 'Fix failing tests',
         kind: 'agentic' as const,
         adapterId,
-        prompt: 'Tests failed. Look at the test output in the store under "test.stderr" and "test.stdout", analyze the failures and fix the code.',
+        prompt: 'Tests failed. Look at the test output in the store under "test.stderr" and "test.stdout", analyze the failures and fix the code. Do not ask for clarification — make your best judgment and edit the file(s).',
         maxRetries: 2,
         timeoutMs: 3 * 60 * 1000,
+        contextOverrides: { allowedTools: AGENT_TOOLS },
+        requiresFileChanges: true,
       },
 
       // Step 10: Verify branch status gate

@@ -1,0 +1,22 @@
+# gitleaks config — drives BOTH the pre-commit hook (.githooks/pre-commit) and CI
+# (.github/workflows/secret-scan.yml). Single source of truth, no drift.
+#
+# Extends gitleaks' built-in ruleset; we only ADD an allowlist. The allowlist is
+# scoped to *.test.ts so legitimate, fabricated redaction fixtures don't hard-fail
+# a commit. PRODUCTION src/ gets NO exemption — a real leak outside tests still blocks.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Secret-SHAPED fixtures that exercise the Scrubber's redaction live only in *.test.ts. Production src/ has NO exemption."
+# Path-scoped only — deliberately NO value/regex allowlist: an explicit regex like
+# AKIAIOSFODNN7EXAMPLE would (a) re-introduce a secret-shaped literal into a tracked
+# file that GitGuardian could re-flag, and (b) wrongly whitelist that value in
+# production code too. Test fixtures are now runtime-constructed (no literal token),
+# so a path allowlist is sufficient and strictly safer.
+paths = [
+  '''.*\.test\.ts$''',
+]
+# Stopwords keep obviously-fabricated bodies from tripping entropy rules.
+stopwords = ['''example''', '''abcdefghijklmnopqrstuvwxyz''']
