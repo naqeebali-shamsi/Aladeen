@@ -130,10 +130,7 @@ export class ClaudeCodeIngester {
     // Accumulators for derived fields.
     let earliestTs: string | undefined;
     let latestTs: string | undefined;
-    // TODO(classify): nothing in this ingester sets this, so inferOutcome rule 3
-    // (explicit fatal-error event -> 'errored') is currently unreachable; fatal
-    // errors are only caught indirectly via the trailing-tool-failure heuristic.
-    const sawFatalError = false;
+    let sawFatalError = false;
     let sawInterrupt = false;
     const cost = {
       inputTokens: 0,
@@ -171,6 +168,26 @@ export class ClaudeCodeIngester {
         file: source.filePath,
         line: lineNumber,
       };
+
+      // Fatal-error detection (feeds inferOutcome rule 3 — a failed model/API
+      // turn, distinct from a tool that returned an error in rule 4). Claude Code
+      // marks an API-error turn with isApiErrorMessage; fatal system-level errors
+      // carry level:'error'. Emit one error event and skip normal processing of
+      // the record (its content IS the error text).
+      if (raw['isApiErrorMessage'] === true || (type === 'system' && raw['level'] === 'error')) {
+        const errText = extractFatalErrorText(raw);
+        events.push({
+          kind: 'error',
+          seq: nextSeq(),
+          timestamp: ts,
+          source: srcRef,
+          errorClass: classifyError(errText),
+          message: this.scrubber.scrubMessage(errText).text,
+          fatal: true,
+        });
+        sawFatalError = true;
+        continue;
+      }
 
       if (type === 'user') {
         const message = (raw['message'] as RawMessage | undefined) ?? {};
@@ -397,6 +414,26 @@ function stringifyToolResultContent(content: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// Pull a human-readable error string out of a fatal-error record (an API-error
+// turn or a system error), tolerating string content, an array of content
+// blocks, or a top-level `content` field.
+function extractFatalErrorText(raw: Record<string, unknown>): string {
+  const msg = raw['message'] as RawMessage | undefined;
+  if (msg) {
+    if (typeof msg.content === 'string') return msg.content;
+    if (Array.isArray(msg.content)) {
+      const text = msg.content
+        .filter((b): b is ContentBlock => b.type === 'text' && typeof b.text === 'string')
+        .map((b) => b.text as string)
+        .join(' ')
+        .trim();
+      if (text) return text;
+    }
+  }
+  if (typeof raw['content'] === 'string') return raw['content'] as string;
+  return 'fatal error';
 }
 
 function pickWrittenContent(toolName: string, args: Record<string, unknown>): string | undefined {

@@ -85,6 +85,10 @@ interface MessageData {
   };
   cost?: number;
   finish?: string;
+  // Provider/model-level failure on this turn (auth, overload, output-length,
+  // abort). Distinct from a tool's state.error — presence means the turn itself
+  // failed, which is the fatal-error signal for inferOutcome rule 3.
+  error?: { name?: string; data?: { message?: string } } | string;
 }
 
 interface PartData {
@@ -165,6 +169,7 @@ export class OpencodeIngester {
 
     // Build message → role map and tokenize cost rollup.
     const messageById = new Map<string, MessageData>();
+    const erroredMessages: Array<{ ts: string | undefined; text: string }> = [];
     let agentCliVersion: string | undefined;
     const cost = {
       inputTokens: 0,
@@ -185,16 +190,19 @@ export class OpencodeIngester {
           cost.cacheCreationTokens += data.tokens.cache?.write ?? 0;
           cost.any = true;
         }
+        if (data.error) {
+          erroredMessages.push({
+            ts: msToIso(row.time_updated || row.time_created),
+            text: extractOpencodeErrorText(data.error),
+          });
+        }
       }
     }
 
     const events: SessionEvent[] = [];
     let seq = 0;
     const nextSeq = () => seq++;
-    // TODO(classify): nothing in this ingester sets this, so inferOutcome rule 3
-    // (explicit fatal-error event -> 'errored') is currently unreachable; fatal
-    // errors are only caught indirectly via the trailing-tool-failure heuristic.
-    const sawFatalError = false;
+    let sawFatalError = false;
 
     const dbBase = path.basename(dbPath);
     const srcRef = () => ({
@@ -314,6 +322,21 @@ export class OpencodeIngester {
       }
     }
 
+    // Emit a fatal error event per errored assistant turn (feeds inferOutcome
+    // rule 3). Positioned before session_end; seq stays monotonic.
+    for (const err of erroredMessages) {
+      events.push({
+        kind: 'error',
+        seq: nextSeq(),
+        timestamp: err.ts,
+        source: srcRef(),
+        errorClass: classifyError(err.text),
+        message: this.scrubber.scrubMessage(err.text).text,
+        fatal: true,
+      });
+      sawFatalError = true;
+    }
+
     events.push({
       kind: 'session_end',
       seq: nextSeq(),
@@ -393,6 +416,13 @@ function stringifyOutput(output: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// Pull a human-readable string out of an opencode message-level error, which
+// may be a bare string or a `{ name, data: { message } }` object.
+function extractOpencodeErrorText(error: NonNullable<MessageData['error']>): string {
+  if (typeof error === 'string') return error;
+  return error.data?.message ?? error.name ?? 'fatal error';
 }
 
 function pickWrittenContent(tool: string, input: Record<string, unknown>): string | undefined {
