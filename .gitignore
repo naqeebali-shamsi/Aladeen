@@ -18,6 +18,11 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Local tooling artifacts (IDE assistants, MCP servers) — never commit
+.cursor/
+.opencode/
+.playwright-mcp/
+
 # Graphify temp + per-run cache (commit the report and graph.json, not the cache)
 .graphify_python
 .graphify_*.json
