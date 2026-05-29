@@ -125,3 +125,30 @@ only its `Status:` line — do not delete or reorder.
 **Notes:** Two evolutions to flag:
 1. **New signal class discovered**: "Tested utility with no production callers" — found bucketFailures unused. Not in the weights table. If this recurs, propose a row at weight 3 ("hollow metric / dead utility").
 2. **Weight-bump candidate ready**: "M-metric has code but no asserting test" is now 3/3 clean wins (M1 runPolicy, M2 blueprint structure, M3 CLI smoke). The current rubric folds this under "Roadmap milestone metric without code backing" (weight 4) but the two are genuinely distinct. Proposing add a new row "Roadmap metric has code but no asserting test" at weight 4 to SKILL.md. Awaiting user approval before editing the rubric mid-flight.
+
+---
+
+## 2026-05-29 — 2 picks (sixth invocation)
+
+**Picks:**
+
+1. **Pin the dashboard client's pure logic with tests** (score: 6) — `Status: completed (commit 5235d19)` — extracted `renderRemedyCard`+`TIER_LABEL` into `web/remedy-card.js`, flipped `app.js`'s `/lib.js`→`./lib.js`, added `lib.test.ts` (16) + `remedy-card.test.ts` (9). 25 new tests, suite 244/244, browser-verified the card still renders post-refactor. `esc` (XSS guard) + verb-discipline (medium/low never emit "fix") are now pinned in code, not just screenshots. No bug surfaced — the client logic was correct as written. NOTE: the "code-backed surface, no asserting test" signal now extends cleanly from the engine era to the new client surface — 5/5 such picks have landed clean.
+   - Why: the new `src/dashboard/web/` client (`app.js` ~700 lines, `lib.js`) is the largest, hottest, fully-UNTESTED surface in the repo — and it's where two invariants live with no test pinning them: the remedy card's verb-discipline ("fix" appears only on the known-fix tier) and `esc()`, the sole XSS guard for session-derived strings (asks, file paths) injected via `innerHTML`. Server-side remedy markdown IS tested (`remedy.test.ts`); the CARD rendering that a human/agent actually reads is verified only by my manual screenshots. This is the proven "code-backed, no asserting test" signal at a new, large scale.
+   - Evidence: grep `*.test.*` under `src/dashboard/web/` → 0 files (commits f83b4b8, e62464d, 7c7a312 added the client this session); `renderRemedyCard`/`interfaceQuery` in `app.js` enforce verb-discipline + `esc()`; `lib.js esc()` is the only escaping of untrusted session content.
+   - Acceptance: `src/dashboard/web/lib.test.ts` pins `esc` (escapes `<>&"'`), `logWidth` (monotonic, respects min/max), `basename` (win+posix); plus a `renderRemedyCard` test asserting medium/low output has no `\bfix\b` except inside "not a fix", and a sibling `ask` containing `<script>` is escaped. Requires changing `app.js`'s `from '/lib.js'` → `./lib.js` (resolves identically in the browser, becomes importable in vitest).
+   - Effort: medium.
+
+2. **Gemini CLI ingester (roadmap Coverage — big-three completeness)** (score: 4) — `Status: suggested`
+   - Why: Coverage is the roadmap's explicit wedge ("without it nothing else matters"). The dashboard shows codex/claude-code/opencode/aladeen but **no Gemini** — the one big-three provider missing. ROADMAP lists it as a planned shape-1 ingester.
+   - Evidence: `ROADMAP.md` "Next ingesters" table (Gemini CLI, shape 1, ~2h, "gated on confirming actual storage path"); `src/observability/ingest/` has claude-code/codex/opencode/openclaw/aladeen-runs, no `gemini.ts`.
+   - Acceptance: `src/observability/ingest/gemini.ts` produces `SessionTrace` from real Gemini CLI logs + a fixture test; `aladeen ingest gemini` wired in `cli.tsx`.
+   - Caveat: gated on confirming the Gemini CLI on-disk log format/path FIRST (research step). If the format can't be confirmed, this isn't actionable yet.
+   - Effort: medium (+ research).
+
+**Picks considered but dropped:**
+- `second-real-agentic-run-success` drift sample (only open postrun pattern) — dropped for the 5th time; needs ≥3 real agentic runs, and post-pivot Aladeen no longer runs agents, so this is effectively dead. Recommend marking it `resolved (won't-fix: pre-pivot signal)` in learnings.md.
+- Refresh the graphify graph (326 nodes, pre-dashboard/remedy — stale) — weight ~2, below threshold.
+
+**Signals consulted:** open postrun (1, stale/deferred ×5), roadmaps (old M1–M5 fully test-backed; new ROADMAP Coverage gaps), recent runs (8, no new signal — no agentic runs post-pivot), recent git (last 14d = this session's dashboard+remedy+security, all server-side tested, client UNtested), prior decisions (5 invocations, all engine/TUI test picks — zero overlap with the new client surface), source-vs-test map.
+
+**Notes:** Signal-landscape shift — every prior pick targeted the orchestrator-era engine; the whole observability/dashboard/remedy surface added this session is the new frontier, and its CLIENT half is the one piece that escaped the test net. The "code-backed, no asserting test" signal (now 4/4 clean) points straight at it. Non-code item out of scope for a pick: PR #2 (dashboard + actionable replay) is open/unmerged — reviewing/merging it is the obvious Distribution-side next step, but that's the developer's call.
