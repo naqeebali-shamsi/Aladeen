@@ -57,7 +57,7 @@ async function boot() {
   const v = data.verdict || {};
   const anomaly = (v.anomalies || [])[0];
   const lines = [
-    'FLIGHT RECORDER 2037 READY',
+    'ALADEEN · SESSION OBSERVABILITY · ONLINE',
     'MOUNTING .aladeen/ingested .......... OK',
     `${data.sessionCount ?? 0} SESSIONS`,
     `${Object.keys(data.byCli || {}).length} CLI LINKS  [${Object.keys(data.byCli || {}).join(' · ')}]`,
@@ -124,7 +124,7 @@ function headerHTML() {
   const cliCount = Object.keys(d?.byCli || {}).length;
   return `
   <header class="mast">
-    <h1>ALADEEN <span class="slash">//</span> FLIGHT RECORDER</h1>
+    <h1>ALADEEN</h1>
     <div class="mast-right">
       <span class="last-ingest">last-ingest ${esc(ingest)}</span>
       <button class="toggle help-btn" id="help">? HELP</button>
@@ -134,7 +134,7 @@ function headerHTML() {
       </div>
     </div>
   </header>
-  <div class="strapline">Failure-pattern flight recorder for your agent-CLI sessions · <b>${d?.sessionCount ?? 0}</b> sessions · <b>${cliCount}</b> CLIs · click any pattern, tile, or dot to drill in · <span class="strap-help">? HELP</span> for a tour</div>`;
+  <div class="strapline">Watches your agent CLIs and shows where they keep getting stuck · <b>${d?.sessionCount ?? 0}</b> sessions · <b>${cliCount}</b> CLIs · click any pattern, tile, or dot to drill in · <span class="strap-help">? HELP</span></div>`;
 }
 
 function legendHTML() {
@@ -451,9 +451,9 @@ function openRawModal(trace, scrub) {
 
 function openHelp() {
   const d = state.data || {};
-  openModal('FLIGHT RECORDER — QUICK START', `
+  openModal('ALADEEN — QUICK START', `
     <div class="help">
-      <p>A <b>flight recorder for your agent-CLI sessions.</b> It reads your local <code>.aladeen/ingested</code> logs and shows — at a glance — where runs went wrong. 100% local; nothing leaves this machine.</p>
+      <p><b>Aladeen watches your agent CLIs and learns from them.</b> It reads your local <code>.aladeen/ingested</code> session logs and shows — at a glance — where runs keep getting stuck. 100% local; nothing leaves this machine.</p>
       <div class="help-grid">
         <div><b>01 BRIDGE</b><span>One-glance status. Is anything on fire right now?</span></div>
         <div><b>02 PATTERNS</b><span>The recurring failure shapes. Click one to ask the machine what happened &amp; how it was fixed.</span></div>

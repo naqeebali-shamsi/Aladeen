@@ -416,7 +416,7 @@ program
 
 program
   .command('dashboard')
-  .description('Open the local FLIGHT RECORDER dashboard (retro sci-fi control center; reads .aladeen/ingested, 100% local)')
+  .description('Open the local Aladeen dashboard (retro sci-fi control center; reads .aladeen/ingested, 100% local)')
   .option('--repo-root <path>', 'Repository root that owns .aladeen/ingested', process.cwd())
   .option('--port <n>', 'Port to bind on 127.0.0.1 (0 = pick a free port)', '4173')
   .option('--no-open', 'Do not auto-open the browser; just print the URL')
@@ -430,7 +430,7 @@ program
       port: Number.parseInt(opts.port, 10) || 0,
       repoRoot: opts.repoRoot,
     });
-    console.log(`\n  ◢ ALADEEN // FLIGHT RECORDER online → ${url}`);
+    console.log(`\n  ◢ ALADEEN online → ${url}`);
     console.log(`    100% local · 127.0.0.1 · Ctrl-C to stop\n`);
     if (opts.open) await openBrowser(url);
     const shutdown = () => { close().finally(() => process.exit(0)); };
