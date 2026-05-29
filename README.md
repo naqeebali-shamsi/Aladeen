@@ -157,6 +157,7 @@ The blueprint engine that originally lived here (DAG runner, deterministic + age
 - Node 20+
 - `sqlite3` on PATH (only needed for the opencode ingester)
 - TypeScript / Vitest / Zod (installed via `npm install`)
+- `gitleaks` (optional) — powers the pre-commit secret scan (`.githooks/pre-commit`, auto-activated by `npm install`); CI scans regardless. See [`docs/security/SECRET-INCIDENT-REMEDIATION.md`](docs/security/SECRET-INCIDENT-REMEDIATION.md).
 
 ## License
 

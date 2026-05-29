@@ -9,10 +9,10 @@ dist/
 logs/
 *.log
 
-# Environment (secrets)
+# Environment (secrets) — ignore every .env variant; allow a committed template
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # OS
 .DS_Store

@@ -20,6 +20,7 @@
   "scripts": {
     "dev": "tsx watch src/index.tsx",
     "dashboard": "tsx src/cli.tsx dashboard",
+    "prepare": "git config core.hooksPath .githooks || true",
     "build": "tsc && node scripts/copy-dashboard-web.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
