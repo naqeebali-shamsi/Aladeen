@@ -109,23 +109,32 @@ function render() {
     `<div id="channel">${channelHTML()}</div>` +
     footerHTML();
   wire(app);
+
+  // First-ever visit: open the tour once so the UI explains itself. Never again.
+  if (!localStorage.getItem('aladeen.helpSeen')) {
+    localStorage.setItem('aladeen.helpSeen', '1');
+    openHelp();
+  }
 }
 
 function headerHTML() {
   const d = state.data;
   const ingest = d?.generatedAt ? new Date(d.generatedAt).toISOString().slice(0, 16).replace('T', ' ') : '—';
   const tab = (id, label) => `<button data-chan="${id}" aria-selected="${state.channel === id}">${label}</button>`;
+  const cliCount = Object.keys(d?.byCli || {}).length;
   return `
   <header class="mast">
     <h1>ALADEEN <span class="slash">//</span> FLIGHT RECORDER</h1>
     <div class="mast-right">
       <span class="last-ingest">last-ingest ${esc(ingest)}</span>
+      <button class="toggle help-btn" id="help">? HELP</button>
       <button class="rescan" id="rescan">⟳ RE-SCAN</button>
       <div class="channels">
         ${tab('bridge', '01 Bridge')}${tab('patterns', '02 Patterns')}${tab('trace', '03 Trace')}
       </div>
     </div>
-  </header>`;
+  </header>
+  <div class="strapline">Failure-pattern flight recorder for your agent-CLI sessions · <b>${d?.sessionCount ?? 0}</b> sessions · <b>${cliCount}</b> CLIs · click any pattern, tile, or dot to drill in · <span class="strap-help">? HELP</span> for a tour</div>`;
 }
 
 function legendHTML() {
@@ -199,8 +208,10 @@ function reticleHTML(d) {
   const v = d.verdict || {};
   const lvl = v.level || 'NOMINAL';
   const sub = v.level === 'ANOMALY'
-    ? `${v.anomalies.length} session(s) &gt; 100 of one class`
-    : `tool-failing ${v.toolFailingSessions}/${v.total} (${pct(v.toolFailingRatio || 0)})`;
+    ? `runaway loop · ${v.anomalies.length} session(s) looped one error 100+×`
+    : v.level === 'DEGRADED'
+      ? `${pct(v.toolFailingRatio || 0)} of sessions hit tool-level errors`
+      : `healthy · ${pct(v.toolFailingRatio || 0)} tool-error rate`;
   return `<div class="reticle level-${lvl}">
     <div class="ring"><span class="verdict">${lvl}</span></div>
     <div class="sub num">${sub}</div>
@@ -403,12 +414,59 @@ async function mountTrace() {
   document.getElementById('raw-json')?.addEventListener('click', () => openRawModal(trace, scrub));
 }
 
-function openRawModal(trace, scrub) {
+// ── Modal (one reusable dialog: raw-JSON, replay, help) ───────────────────
+function openModal(title, bodyHTML, subtitle) {
+  closeModal();
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal"><div class="scrub">scrubbed: ${esc(scrub)} — verify before sharing</div><pre>${esc(JSON.stringify(trace, null, 2).slice(0, 20000))}</pre></div>`;
-  bg.addEventListener('click', () => bg.remove());
+  bg.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="modal-head">
+        <span class="modal-title">${esc(title)}</span>
+        <button class="modal-close" aria-label="Close dialog">✕ CLOSE</button>
+      </div>
+      ${subtitle ? `<div class="scrub">${esc(subtitle)}</div>` : ''}
+      <div class="modal-body">${bodyHTML}</div>
+      <div class="modal-hint">[ press ESC · click ✕ · or click outside to close ]</div>
+    </div>`;
+  // Close on backdrop click only — clicks inside the dialog must NOT dismiss it
+  // (so text stays selectable / scrollable).
+  bg.addEventListener('click', (e) => { if (e.target === bg) closeModal(); });
+  bg.querySelector('.modal-close').addEventListener('click', closeModal);
+  document.addEventListener('keydown', escClose);
   document.body.appendChild(bg);
+  bg.querySelector('.modal-close').focus();
+}
+function escClose(e) { if (e.key === 'Escape') closeModal(); }
+function closeModal() {
+  document.querySelectorAll('.modal-bg').forEach((b) => b.remove());
+  document.removeEventListener('keydown', escClose);
+}
+
+function openRawModal(trace, scrub) {
+  openModal('RAW SESSION TRACE',
+    `<pre>${esc(JSON.stringify(trace, null, 2).slice(0, 20000))}</pre>`,
+    `scrubbed: ${scrub} — verify before sharing`);
+}
+
+function openHelp() {
+  const d = state.data || {};
+  openModal('FLIGHT RECORDER — QUICK START', `
+    <div class="help">
+      <p>A <b>flight recorder for your agent-CLI sessions.</b> It reads your local <code>.aladeen/ingested</code> logs and shows — at a glance — where runs went wrong. 100% local; nothing leaves this machine.</p>
+      <div class="help-grid">
+        <div><b>01 BRIDGE</b><span>One-glance status. Is anything on fire right now?</span></div>
+        <div><b>02 PATTERNS</b><span>The recurring failure shapes. Click one to ask the machine what happened &amp; how it was fixed.</span></div>
+        <div><b>03 TRACE</b><span>One session, event by event — the forensic timeline.</span></div>
+      </div>
+      <ul class="help-list">
+        <li><b>VERDICT</b> (the ring): <b>NOMINAL</b> → <b>DEGRADED</b> → <b>ANOMALY</b>, derived live from your data. ANOMALY = one session looped a single error 100+ times (a runaway loop).</li>
+        <li><b>FINGERPRINT</b> = a hash that buckets similar failures together. The hex is a copy-key, not a label — the readable label is <code>CLI · OUTCOME · top-error</code>.</li>
+        <li><b>Drill in:</b> click any <b>fingerprint row</b>, <b>CLI tile</b>, or <b>outcome dot</b>. On PATTERNS, ↑/↓ rove rows, Enter interfaces.</li>
+        <li><b>Controls:</b> <b>RE-SCAN</b> re-reads disk after you ingest more. Toggle <b>CRT</b> / <b>MOTION</b> in the footer (reduced-motion safe).</li>
+      </ul>
+      <p class="help-foot">Reading <b>${d.sessionCount ?? 0}</b> sessions · <b>${(d.fingerprints || []).length}</b> fingerprints · <b>${Object.keys(d.byCli || {}).length}</b> CLIs. Reopen this anytime with <b>? HELP</b>.</p>
+    </div>`);
 }
 
 // ── INTERFACE interaction ─────────────────────────────────────────────────
@@ -462,15 +520,15 @@ async function openReplayModal(fp) {
   let r;
   try { r = await fetch(`/api/replay/${encodeURIComponent(fp)}`).then((x) => x.json()); }
   catch (e) { return; }
-  const bg = document.createElement('div');
-  bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal"><div class="scrub">REPLAY ${esc(fp.slice(0, 12))} · ${r.matchCount} sessions · read-only drill-down (no agent execution)</div><pre>${esc(r.markdown || '')}</pre></div>`;
-  bg.addEventListener('click', () => bg.remove());
-  document.body.appendChild(bg);
+  openModal(`REPLAY · ${fp.slice(0, 12)}`,
+    `<pre>${esc(r.markdown || '')}</pre>`,
+    `${r.matchCount} sessions · read-only drill-down (no agent execution)`);
 }
 
 // ── Wiring ──────────────────────────────────────────────────────────────
 function wire(app) {
+  document.getElementById('help')?.addEventListener('click', openHelp);
+  app.querySelector('.strap-help')?.addEventListener('click', openHelp);
   document.getElementById('rescan')?.addEventListener('click', async () => {
     try { state.data = await fetchOverview(); } catch (e) { state.data = { __error: String(e) }; }
     render();
@@ -540,8 +598,27 @@ function focusRow(rows, i) {
 }
 
 // ── utils ───────────────────────────────────────────────────────────────
+// Plain-language hover hints — progressive disclosure, zero added on-screen text.
+const PANEL_HINTS = {
+  STATUS: 'Overall verdict, derived live from your sessions. Click for the rule that fired.',
+  'CLI INTERFACE LINKS': 'How many ingested sessions came from each agent CLI. Click a tile to filter patterns.',
+  'FLEET VITALS': 'Session outcomes, plus the share of sessions that hit a tool-level error.',
+  'CONSOLE': 'Recurring failure shapes, biggest first (log scale). Click a row to interface with it.',
+  'ERROR CLASS': 'Total error occurrences by class, log scale. worktree_collision dwarfs the rest.',
+  'ACTIVE TIME': 'How long real work took (idle gaps excluded — not wall-clock).',
+  'FILE HOTSPOTS': 'Files touched most across sessions, by basename. File telemetry is sparse.',
+  'LOOP DETECTOR': 'Tool pairs called in near-lockstep — a deterministic retry loop.',
+  OUTCOMES: 'One dot per session. Click a non-green dot to open its trace.',
+  'FINGERPRINT POWER-LAW': 'Every failure shape ranked by frequency. Click a row to query it.',
+  INTERFACE: 'Ask the recorder about a pattern: what was asked, what failed, the known-good fix.',
+};
+function panelHint(title) {
+  for (const key of Object.keys(PANEL_HINTS)) if (title.startsWith(key)) return PANEL_HINTS[key];
+  return '';
+}
 function panel(title, body) {
-  return `<section class="panel"><span class="br-bl"></span><span class="br-br"></span><h2>${esc(title)}</h2>${body}</section>`;
+  const hint = panelHint(title);
+  return `<section class="panel"${hint ? ` title="${esc(hint)}"` : ''}><span class="br-bl"></span><span class="br-br"></span><h2>${esc(title)}</h2>${body}</section>`;
 }
 function shortId(id) {
   const s = String(id).replace(/^[a-z]+:/, '');
