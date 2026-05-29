@@ -143,7 +143,7 @@ export class OpenClawIngester {
 
     let earliestTs: string | undefined;
     let latestTs: string | undefined;
-    let cost = {
+    const cost = {
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,

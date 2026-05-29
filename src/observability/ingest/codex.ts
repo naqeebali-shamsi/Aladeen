@@ -7,7 +7,7 @@ import {
   type SessionTrace,
 } from '../session-trace.js';
 import { Scrubber } from '../scrubber.js';
-import { parseJsonl, type RawLine } from './_shared/jsonl.js';
+import { parseJsonl } from './_shared/jsonl.js';
 import { inferOutcome } from './_shared/outcome.js';
 import { classifyError } from './_shared/classify-error.js';
 

@@ -53,9 +53,18 @@ function trace(sessionId: string): SessionTrace {
 // behavior we wrote in src/mcp/server.ts from the transport machinery
 // which has its own tests upstream in the SDK.
 
+type ToolResult = {
+  content: Array<{ type: string; text: string }>;
+  structuredContent: Record<string, unknown>;
+  isError?: boolean;
+};
+type ResourceResult = { contents: Array<{ text: string }> };
+type ToolHandler = (input: Record<string, unknown>) => Promise<ToolResult>;
+type ResourceHandler = (uri: URL, params: Record<string, unknown>) => Promise<ResourceResult>;
+
 interface Captured {
-  tools: Map<string, { config: unknown; handler: (input: any) => Promise<any> }>;
-  resources: Map<string, { handler: (uri: URL, params: any) => Promise<any> }>;
+  tools: Map<string, { config: unknown; handler: ToolHandler }>;
+  resources: Map<string, { handler: ResourceHandler }>;
 }
 
 async function captureRegistrations(storage: IngestStorage): Promise<Captured> {
@@ -75,15 +84,15 @@ async function captureRegistrations(storage: IngestStorage): Promise<Captured> {
   const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
   const origRegisterTool = McpServer.prototype.registerTool;
   const origRegisterResource = McpServer.prototype.registerResource;
-  McpServer.prototype.registerTool = function (name: string, config: any, handler: any) {
-    captured.tools.set(name, { config, handler });
-    return origRegisterTool.call(this, name, config, handler);
-  };
-  McpServer.prototype.registerResource = function (...args: any[]) {
+  McpServer.prototype.registerTool = function (name: string, config: unknown, handler: unknown) {
+    captured.tools.set(name, { config, handler: handler as ToolHandler });
+    return (origRegisterTool as unknown as (...a: unknown[]) => unknown).call(this, name, config, handler);
+  } as typeof McpServer.prototype.registerTool;
+  McpServer.prototype.registerResource = function (...args: unknown[]) {
     const [name, , , handler] = args;
-    captured.resources.set(name, { handler });
-    return (origRegisterResource as any).apply(this, args);
-  };
+    captured.resources.set(name as string, { handler: handler as ResourceHandler });
+    return (origRegisterResource as unknown as (...a: unknown[]) => unknown).apply(this, args);
+  } as typeof McpServer.prototype.registerResource;
   try {
     buildServer({ storage });
   } finally {

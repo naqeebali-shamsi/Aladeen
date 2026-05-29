@@ -191,10 +191,13 @@ export class OpencodeIngester {
     const events: SessionEvent[] = [];
     let seq = 0;
     const nextSeq = () => seq++;
-    let sawFatalError = false;
+    // TODO(classify): nothing in this ingester sets this, so inferOutcome rule 3
+    // (explicit fatal-error event -> 'errored') is currently unreachable; fatal
+    // errors are only caught indirectly via the trailing-tool-failure heuristic.
+    const sawFatalError = false;
 
     const dbBase = path.basename(dbPath);
-    const srcRef = (extra?: string) => ({
+    const srcRef = () => ({
       kind: 'opencode-session' as const,
       file: dbPath,
       // line: not meaningful for SQLite; encode the row id in byteOffset

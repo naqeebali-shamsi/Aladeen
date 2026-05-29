@@ -8,7 +8,7 @@ import {
   type SessionOutcome,
 } from '../session-trace.js';
 import { Scrubber } from '../scrubber.js';
-import { parseJsonl, type RawLine } from './_shared/jsonl.js';
+import { parseJsonl } from './_shared/jsonl.js';
 import { inferOutcome } from './_shared/outcome.js';
 import { classifyError } from './_shared/classify-error.js';
 
@@ -130,9 +130,12 @@ export class ClaudeCodeIngester {
     // Accumulators for derived fields.
     let earliestTs: string | undefined;
     let latestTs: string | undefined;
-    let sawFatalError = false;
+    // TODO(classify): nothing in this ingester sets this, so inferOutcome rule 3
+    // (explicit fatal-error event -> 'errored') is currently unreachable; fatal
+    // errors are only caught indirectly via the trailing-tool-failure heuristic.
+    const sawFatalError = false;
     let sawInterrupt = false;
-    let cost = {
+    const cost = {
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
