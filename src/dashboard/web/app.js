@@ -501,7 +501,7 @@ const TIER_LABEL = { 'known-fix': 'KNOWN FIX', medium: 'LEAD', low: 'THIN', none
 // Pure string builder for the REMEDY card. Field names match remedy.ts exactly.
 function renderRemedyCard(r, fp) {
   const lines = [];
-  const badge = `<span class="remedy-badge tier-${r.tier}">${TIER_LABEL[r.tier] || 'NONE'}</span>`;
+  const badge = `<span class="remedy-badge tier-${esc(r.tier)}">${TIER_LABEL[r.tier] || 'NONE'}</span>`;
   lines.push(`<div class="line prompt">&gt; REMEDY · ${esc(fp.slice(0, 12))} ${badge}`
     + `  [n_failed=${r.nFailed} · n_resolved=${r.nResolved}]</div>`);
   lines.push(`<div class="line remedy-guardrail">${esc(r.guardrail)}</div>`); // verbatim, never edited

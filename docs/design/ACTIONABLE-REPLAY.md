@@ -806,8 +806,9 @@ success/failure classifier. Placement: directly under the H1.
 
 (b) README intro + Actionable replay + Status + Known limits read the matcher as roadmap and name
     `worktree_collision` as the only live known-fix; `lint_loop` scoped as "armed, not yet live".
-    Delivered observability bullets (lines 61-65) unchanged. `grep -i "replay this fix"` over the
-    repo returns 0 matches.
+    Delivered observability bullets (lines 61-65) unchanged. `grep -i "replay this fix"` over
+    `src/` returns 0 matches (the operative runtime target). The string intentionally survives in
+    these design docs (this spec quotes the button it removes; SCREENS.md is historical record).
 
 (c) README has the one-line name gloss under the H1 tying "Aladeen" to *The Dictator*'s word
     (positive AND negative) and the success/failure classifier — no invented acronym.

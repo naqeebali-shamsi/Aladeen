@@ -337,7 +337,7 @@ resting amber (cyan/sunflower) that survives reduced-motion.
 
 ```
 +==========================================================================================+
-| ALADEEN // FLIGHT RECORDER · 02 PATTERNS                  [SHOW NOMINAL (3)]  01 (02) 03  |
+| ALADEEN · 02 PATTERNS                                     [SHOW NOMINAL (3)]  01 (02) 03  |
 | +--------------------------------------------------------------------------------------+ |
 | | ⌜ FINGERPRINT POWER-LAW · 42 SHAPES · sorted by bucket size                       ⌝  | |
 | |                                                                                      | |
@@ -354,15 +354,17 @@ resting amber (cyan/sunflower) that survives reduced-motion.
 | +--------------------------------------------------------------------------------------+ |
 | +--------------------------------------------------------------------------------------+ |
 | | ⌜ INTERFACE                                                                       ⌝  | |
-| | > INTERFACING WITH PATTERN 2fcd8f35a91b…                                             | |
-| |   DECODED: CODEX · completed · tool_error    [21 sessions]                           | |
-| |   ASK: "fix the failing lint step in the deterministic executor and re-run…"         | |  ← replay.ts firstUser
-| |   FIRST FAIL (tool_error): "exit 1: 3 problems (2 errors, 1 warning)…"                | |  ← replay.ts firstFail
-| |   TOOLS: shell_command×892  lint×214  fix-lint×210  apply_patch×88  Read×40           | |  ← summed toolUsage
-| |   FILES: runner.ts (8) · deterministic-executor.ts (6) · cli.tsx (4)                  | |  ← filesChanged touch-count
-| |   ACTIVE total 41m12s · mean 1m57s (n=21)                                            | |  ← summed activeDurationMs
-| |                                                       [ ⟳ REPLAY THIS FIX ]          | |  ← HOT amber→white, lone gradient
-| | ⌞ arrow=rove · enter=interface · hold=skip type-on · aria-live announced          ⌟  | |
+| | > PATTERN 2fcd8f35a91b…                                                              | |
+| |   DECODED: CODEX · completed · tool_error                                            | |
+| | > REMEDY · 2fcd8f35a91b  [LEAD]   [n_failed=21 · n_resolved=21]                      | |  ← tier badge + denominators
+| |   n=21 resolved session(s) shared this shape; a lead, not a fix — judge it yourself. | |  ← tier-bound guardrail (verbatim)
+| |   Aladeen does not run anything.                                                     | |
+| |   ASK: "fix the failing lint step in the deterministic executor and re-run…"         | |  ← prior resolved session's ask
+| |   DID: shell_command → lint → fix-lint → apply_patch → Read                          | |  ← sharedTools
+| |   FILES (change-shaped, no diff stored): runner.ts (+8/-2) · cli.tsx (+4/-0)         | |  ← path + line counts, never content
+| |   Coverage across 199 sessions: filesChanged 22/199 · cost 51/199 · editLoops 7/199  | |  ← live coverageNote
+| |                                                              RAW DRILL-DOWN ↗        | |  ← opens the read-only /api/replay modal
+| | ⌞ arrow=rove · enter=interface · KNOWN FIX | LEAD | THIN | NONE · suggests, never runs ⌟| |
 | +--------------------------------------------------------------------------------------+ |
 | ⌞ 100% LOCAL · hex is a copy-key, not a label (sha256 one-way) · MOTION [reduce]       ⌟ |
 +==========================================================================================+

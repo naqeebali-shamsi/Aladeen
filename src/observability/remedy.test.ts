@@ -97,6 +97,8 @@ describe('suggestRemedy — none / suppression', () => {
     expect(r.subSignature).toBe('');
     expect(r.resolvedSiblings).toHaveLength(0);
     expect(r.guardrail).toContain('No comparable resolved session in your history yet. Read-only drill-down only.');
+    // Also assert the sentence lands in the markdown body, not only the guardrail.
+    expect(r.markdown).toContain('No comparable resolved session in your history yet. Read-only drill-down only.');
   });
 
   it('5. non-empty signature with zero resolved siblings → none, prints denominators', async () => {

@@ -322,16 +322,6 @@ a { color: var(--accent); }
 .interface .fail { color: var(--danger); }
 @keyframes blink { 50% { opacity: 0; } }
 
-.replay-btn {
-  margin-top: var(--sp-3); display: inline-flex; align-items: center; gap: 6px;
-  min-height: 44px; padding: 0 var(--sp-4);
-  font-family: var(--font-display); letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--bg); cursor: pointer; border: 0;
-  background: linear-gradient(90deg, var(--replay-from), var(--replay-to));
-}
-.replay-btn:hover { filter: brightness(1.1); }
-.replay-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
 /* ── Remedy card (actionable replay) ─────────────────────────────────── */
 
 .remedy-badge {
