@@ -1,5 +1,4 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import path from 'node:path';
 import {
   AladeenConfig,
   AladeenConfigSchema,
