@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { resolveBinaryWith, _resetBinaryResolverCache } from './binary-resolver.js';
+import { findBinaryWith, resolveBinaryWith, _resetBinaryResolverCache } from './binary-resolver.js';
 
 beforeEach(() => _resetBinaryResolverCache());
 
@@ -78,5 +78,20 @@ describe('resolveBinaryWith', () => {
     const exists = (p: string) => p === 'C:\\bin\\claude.cmd';
     const out = resolveBinaryWith('claude', 'win32', ['', 'C:\\bin', ''], ['.cmd'], exists);
     expect(out).toBe('C:\\bin\\claude.cmd');
+  });
+
+  it('findBinaryWith finds bare commands on non-Windows PATH entries', () => {
+    const out = findBinaryWith('claude', 'linux', ['/usr/local/bin', '/usr/bin'], ['.exe'], (p) => p === '/usr/bin/claude');
+    expect(out).toBe('/usr/bin/claude');
+  });
+
+  it('findBinaryWith returns null when a bare command is missing', () => {
+    const out = findBinaryWith('not-installed', 'linux', ['/usr/bin'], ['.exe'], () => false);
+    expect(out).toBeNull();
+  });
+
+  it('findBinaryWith returns null when a qualified command path is missing', () => {
+    const out = findBinaryWith('/opt/bin/claude', 'linux', ['/usr/bin'], ['.exe'], () => false);
+    expect(out).toBeNull();
   });
 });

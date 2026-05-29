@@ -29,7 +29,10 @@ const OPENCODE_CONFIG_PATH = path.join(
 const AUDEX_ROOT = 'N:/ITSUBI AUDIT';
 const TASK_ID = `audex-format-currency-oc-${Date.now()}`;
 const TARGET_FILE = 'app/main/utils/format-currency.js';
-const MODEL = process.env['OPENCODE_MODEL'] ?? 'ollama/qwen2.5-coder:14b';
+// qwen3-coder:30b is Qwen's agentic-tuned MoE (3B active params, fast).
+// 2.5-coder is a code-completion model and hallucinates tool names — surfaced
+// by the second opencode dogfood (see run da35b9a6 in Audex .aladeen/runs/).
+const MODEL = process.env['OPENCODE_MODEL'] ?? 'ollama/qwen3-coder:30b';
 
 const PROMPT = `Create a new file at ${TARGET_FILE}.
 
