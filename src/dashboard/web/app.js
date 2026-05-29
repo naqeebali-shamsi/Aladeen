@@ -483,37 +483,61 @@ async function interfaceQuery(fp) {
 
   let r;
   try {
-    r = await fetch(`/api/replay/${encodeURIComponent(fp)}`).then((x) => x.json());
+    r = await fetch(`/api/remedy/${encodeURIComponent(fp)}`).then((x) => x.json());
   } catch (e) {
-    pane.innerHTML += `<div class="line fail">interface error: ${esc(String(e))}</div>`;
+    pane.innerHTML += `<div class="line fail">remedy error: ${esc(String(e))}</div>`;
     return;
   }
-  const p = parseReplay(r.markdown || '');
-  pane.innerHTML = `
-    <div class="line prompt">&gt; PATTERN ${esc(fp.slice(0, 12))}  [${r.matchCount} sessions]</div>
-    <div class="line meta">DECODED: ${esc(bucket?.label || '—')}</div>
-    ${p.ask ? `<div class="line"><span class="meta">ASK: </span><span class="ask">${esc(p.ask)}</span></div>` : ''}
-    ${p.fail ? `<div class="line"><span class="meta">FIRST FAIL: </span><span class="fail">${esc(p.fail)}</span></div>` : ''}
-    ${p.tools ? `<div class="line meta">TOOLS: ${esc(p.tools)}</div>` : ''}
-    ${p.files ? `<div class="line meta">FILES: ${esc(p.files)}</div>` : ''}
-    ${p.active ? `<div class="line meta">${esc(p.active)}</div>` : ''}
-    <button class="replay-btn" data-replay-open="${esc(fp)}">⟳ REPLAY THIS FIX</button>`;
+  pane.innerHTML =
+    `<div class="line prompt">&gt; PATTERN ${esc(fp.slice(0, 12))}</div>` +
+    `<div class="line meta">DECODED: ${esc(bucket?.label || '—')}</div>` +
+    renderRemedyCard(r, fp);
 }
 
-function parseReplay(md) {
-  const out = {};
-  const ask = md.match(/- ask:\s*(.+)/);
-  if (ask) out.ask = ask[1].trim();
-  const fail = md.match(/- first failure \(`(.+?)`\):\s*(.+)/);
-  if (fail) out.fail = `(${fail[1]}) ${fail[2].trim()}`;
-  const active = md.match(/- \*\*Active duration:\*\*\s*(.+)/);
-  if (active) out.active = `ACTIVE ${active[1].replace(/\*/g, '').trim()}`;
-  const toolLines = [...md.matchAll(/- `([^`]+)` × (\d+)/g)].slice(0, 5).map((m) => `${m[1]}×${m[2]}`);
-  if (toolLines.length) out.tools = toolLines.join('  ');
-  const fileSection = md.split('## Files touched')[1] || '';
-  const fileLines = [...fileSection.matchAll(/- `([^`]+)`/g)].slice(0, 4).map((m) => basename(m[1]));
-  if (fileLines.length) out.files = fileLines.join(' · ');
-  return out;
+// Badge words must never carry more confidence than the templated guardrail. Only known-fix
+// asserts a fix; 'medium' is a LEAD, not 'likely'.
+const TIER_LABEL = { 'known-fix': 'KNOWN FIX', medium: 'LEAD', low: 'THIN', none: 'NONE' };
+
+// Pure string builder for the REMEDY card. Field names match remedy.ts exactly.
+function renderRemedyCard(r, fp) {
+  const lines = [];
+  const badge = `<span class="remedy-badge tier-${r.tier}">${TIER_LABEL[r.tier] || 'NONE'}</span>`;
+  lines.push(`<div class="line prompt">&gt; REMEDY · ${esc(fp.slice(0, 12))} ${badge}`
+    + `  [n_failed=${r.nFailed} · n_resolved=${r.nResolved}]</div>`);
+  lines.push(`<div class="line remedy-guardrail">${esc(r.guardrail)}</div>`); // verbatim, never edited
+
+  if (r.tier === 'known-fix' && (r.ruleMatches || []).length) {
+    const rm = r.ruleMatches[0];
+    lines.push(`<div class="line"><span class="meta">KNOWN FIX: </span>`
+      + `<span class="ask">${esc(rm.headline)} ${esc(rm.remedyText)}</span></div>`);
+    const cites = (rm.citations || []).map((c) => `${esc(c.file)}:${esc(c.lines)} (${esc(c.what)})`).join(' · ');
+    if (cites) lines.push(`<div class="line meta">EVIDENCE: ${cites}</div>`);
+  }
+
+  if (r.tier === 'medium' || r.tier === 'low') {        // verb discipline: never emit 'fix' here
+    for (const s of (r.resolvedSiblings || [])) {       // already capped at 3 upstream
+      if (s.ask) lines.push(`<div class="line"><span class="meta">ASK: </span>`
+        + `<span class="ask">${esc(s.ask)}</span></div>`);
+      if (s.sharedTools && s.sharedTools.length)
+        lines.push(`<div class="line meta">DID: ${esc(s.sharedTools.join(' → '))}</div>`);
+      if (s.hasFileTelemetry && s.changeShaped && s.changeShaped.length) {
+        const files = s.changeShaped.slice(0, 4).map((f) => {
+          const d = (f.linesAdded != null || f.linesRemoved != null)
+            ? ` (+${f.linesAdded ?? 0}/-${f.linesRemoved ?? 0})` : '';
+          return `${esc(basename(f.path))}${esc(d)}`;
+        }).join(' · ');
+        lines.push(`<div class="line meta change-shaped">FILES (change-shaped, no diff stored): ${files}</div>`);
+      } else {
+        lines.push(`<div class="line meta change-shaped">no file telemetry for this session</div>`);
+      }
+    }
+  }
+
+  lines.push(`<div class="line meta">${esc(r.coverageNote)}</div>`);
+  // RAW DRILL-DOWN reuses the EXISTING delegated [data-replay-open] listener -> openReplayModal.
+  lines.push(`<div class="line"><a class="raw-link" data-replay-open="${esc(fp)}" `
+    + `role="button" tabindex="0">RAW DRILL-DOWN ↗</a></div>`);
+  return lines.join('');
 }
 
 async function openReplayModal(fp) {

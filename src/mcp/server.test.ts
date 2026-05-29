@@ -194,4 +194,70 @@ describe('MCP server', () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it('suggest_remedy returns a known-fix tier for a worktree_collision failure', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      await storage.writeDigest(digest({
+        sessionId: 'wc', agentCliName: 'aladeen', outcome: 'gave_up', toolFailureCount: 2267,
+        patternFingerprint: 'wc00000000000000',
+        errorCounts: { worktree_collision: 2267 } as RunDigest['errorCounts'],
+      }));
+      const captured = await captureRegistrations(storage);
+      const tool = captured.tools.get('suggest_remedy');
+      expect(tool).toBeDefined();
+      const r = await tool!.handler({ fingerprint: 'wc00000000000000' });
+      expect(r.isError).toBe(false);
+      expect(r.structuredContent.tier).toBe('known-fix');
+      expect(r.structuredContent.ruleCount).toBeGreaterThanOrEqual(1);
+      expect(r.content[0].text).toContain('install dependencies inside the git worktree');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('suggest_remedy returns tier none for an empty-subSignature failing bucket', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      await storage.writeDigest(digest({
+        sessionId: 'es', outcome: 'gave_up', toolFailureCount: 0,
+        patternFingerprint: 'es00000000000000',
+        errorCounts: {} as RunDigest['errorCounts'],
+      }));
+      const captured = await captureRegistrations(storage);
+      const r = await captured.tools.get('suggest_remedy')!.handler({ fingerprint: 'es00000000000000' });
+      expect(r.isError).toBe(false);
+      expect(r.structuredContent.tier).toBe('none');
+      expect(r.structuredContent.resolvedSampleCount).toBe(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('suggest_remedy flags an unknown fingerprint as an error', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      const captured = await captureRegistrations(storage);
+      const r = await captured.tools.get('suggest_remedy')!.handler({ fingerprint: 'nope' });
+      expect(r.isError).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('suggest_remedy is described as suggesting, never executing', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      const captured = await captureRegistrations(storage);
+      const cfg = captured.tools.get('suggest_remedy')!.config as { description: string };
+      expect(cfg.description.toLowerCase()).toContain('suggests');
+      expect(cfg.description.toLowerCase()).toContain('never executes');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

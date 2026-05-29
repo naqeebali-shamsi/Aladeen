@@ -3,6 +3,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { IngestStorage } from '../observability/storage.js';
 import { formatReport } from '../observability/report.js';
 import { replayFingerprint } from '../observability/replay.js';
+import { suggestRemedy } from '../observability/remedy.js';
 import type { RunDigest } from '../observability/session-trace.js';
 
 // Aladeen as an MCP server. Wraps the same observability primitives the
@@ -46,8 +47,9 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
         'Aladeen is an observability + learning layer over agent CLI session logs.',
         'Use query_failure_patterns to see which failure shapes have recurred in this',
         'repo. Use replay_fingerprint(fp) to drill into a specific bucket and see',
-        'concrete file/tool/error aggregates. Resources expose the raw digests and',
-        'individual session traces.',
+        'concrete file/tool/error aggregates. Use suggest_remedy(fp) for an actionable',
+        'read-only remedy; it suggests, never executes. Resources expose the raw digests',
+        'and individual session traces.',
       ].join(' '),
     },
   );
@@ -114,6 +116,42 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
           matchCount: result.matchedDigests.length,
         },
         isError: result.matchedDigests.length === 0,
+      };
+    },
+  );
+
+  // ── Tool 3: suggest_remedy ────────────────────────────────────────────
+  server.registerTool(
+    'suggest_remedy',
+    {
+      title: 'Suggest a remedy for a failure-pattern fingerprint',
+      description:
+        'Returns a read-only remedy suggestion for a failing pattern: a known-fix pointer when the ' +
+        "shape is a solved bug in this repo's own engine, otherwise the prior sessions that hit " +
+        'the same (agent + error) shape and later completed — their ask, tools, and change-shaped ' +
+        'file evidence. Confidence is an honest tier (known-fix / medium / low / none) and every ' +
+        'result prints its denominators. It SUGGESTS a remedy; it NEVER executes or launches an ' +
+        "agent. Acting on a remedy is the calling agent's or human's decision.",
+      inputSchema: {
+        fingerprint: z.string().min(1)
+          .describe('The patternFingerprint from query_failure_patterns. Prefix match when unambiguous.'),
+        max_samples: z.number().int().positive().max(20).optional()
+          .describe('Max resolved siblings to deep-load for evidence. Default 3 (hard cap 3).'),
+      },
+    },
+    async (input) => {
+      const result = await suggestRemedy(input.fingerprint, storage, {
+        maxResolvedSamples: input.max_samples ?? 3,
+      });
+      return {
+        content: [{ type: 'text', text: result.markdown }],
+        structuredContent: {
+          fingerprint: result.fingerprint,
+          tier: result.tier,
+          ruleCount: result.ruleMatches.length,
+          resolvedSampleCount: result.resolvedSiblings.length,
+        },
+        isError: result.failingDigests.length === 0,
       };
     },
   );

@@ -68,7 +68,8 @@ export async function replayFingerprint(
 
 // Prefix match when unambiguous. Exact match wins over prefix. Empty
 // input returns no matches. Treats hex case-insensitively.
-function matchFingerprint(input: string, digests: RunDigest[]): RunDigest[] {
+// Exported so the remedy engine reuses the exact same bucket-matching semantics.
+export function matchFingerprint(input: string, digests: RunDigest[]): RunDigest[] {
   const lowered = input.toLowerCase();
   if (!lowered) return [];
 

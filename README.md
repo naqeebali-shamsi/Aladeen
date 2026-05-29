@@ -1,8 +1,10 @@
 # Aladeen
 
-Observability and learning layer for agent CLIs.
+_Named after the all-purpose word from_ The Dictator _— it means both "positive" and "negative" at once. Fitting for a tool whose whole job is sorting agent sessions into exactly those two piles._
 
-Aladeen reads the session logs that tools like **Claude Code**, **opencode**, **Codex**, and **OpenClaw** leave behind, normalizes them into a single schema, and produces failure-pattern reports + drill-down replays. It doesn't replace your agent — it watches it work and tells you where it keeps getting stuck.
+Observability layer for agent CLIs, with a learning layer landing on top.
+
+Aladeen reads the session logs that tools like **Claude Code**, **opencode**, **Codex**, and **OpenClaw** leave behind, normalizes them into a single schema, and **today** produces failure-pattern reports + drill-down replays. A **learning layer** is landing on top of that: for a failing pattern, Aladeen surfaces a read-only remedy — a known-fix pointer when the shape is a solved bug in this repo's own engine, and (as your history grows) the prior sessions that hit the same shape and later completed (see [Actionable replay](#actionable-replay-landing) and [Status](#status)). It doesn't replace your agent — it watches it work and tells you where it keeps getting stuck.
 
 ## Install
 
@@ -48,10 +50,11 @@ The server runs locally over stdio, reads `<cwd>/.aladeen/ingested/`, and expose
 
 - **Tool** `query_failure_patterns({ all?, limit? })` — the same report `aladeen report` produces
 - **Tool** `replay_fingerprint({ fingerprint, max_sessions? })` — markdown drill-down for one bucket
+- **Tool** `suggest_remedy({ fingerprint, max_samples? })` — _(learning layer, landing)_ a read-only remedy suggestion for a failing pattern: prior sessions of the same shape that later completed, a known-fix pointer where one exists, and an honest confidence tier. It **suggests, never executes** — see [Actionable replay](#actionable-replay-landing).
 - **Resource** `aladeen://digests` — JSON of every stored `RunDigest`
 - **Resource** `aladeen://sessions/{sessionId}` — full `SessionTrace` for one session
 
-The server never touches the network and never launches an agent. It only reads what prior `aladeen ingest <source>` runs wrote to disk.
+The server never touches the network and never launches an agent — `suggest_remedy` included. It only reads what prior `aladeen ingest <source>` runs wrote to disk.
 
 A single `aladeen report` gives you:
 
@@ -62,6 +65,16 @@ A single `aladeen report` gives you:
 - **Per-session table** — by active duration (idle gaps over 10 min excluded), with toolFail/editLoop annotations
 
 `aladeen replay <fingerprint>` then takes any bucket and produces a markdown drill-down: aggregated tool/file/error totals across the bucket plus the first user ask and first failed tool result from each matching session. The format is intentionally consumable by both humans and downstream agents.
+
+<a id="actionable-replay-landing"></a>
+
+### Actionable replay (learning layer — landing now)
+
+The first slice of the learning layer turns the read-only drill-down into a **read-only suggestion**. Given a failing pattern, Aladeen looks for prior sessions that hit the same `(agent + error class)` shape and later completed, and surfaces what they were asked, the tools they used, and the files they touched — plus a **known-fix** pointer when the failure is a solved bug in this repo's own engine (e.g. `worktree_collision` → install deps in the worktree before the gate, the `bootstrap-deps` node in `src/blueprints/implement-feature.ts`; a lint/typecheck **edit loop** → bounded retry, `maxTotalRetries` in the same blueprint — the linter's `--fix` capability in `src/engine/verifiers/lint.ts` is available but not wired into this blueprint).
+
+Confidence is an honest tier — **known-fix** / **low** / **none** — and every suggestion prints its denominators (how many failed sessions, how many resolved siblings). Most buckets are still small, so **none** ("no comparable resolved session in your history yet — read-only drill-down only") is the common, expected answer. Today the only live known-fix on a typical store is `worktree_collision`; the `lint_loop` rule is armed but only fires once a session is classified with an actual edit loop.
+
+**Aladeen suggests; it never runs the agent.** This is not orchestration: there is no auto-execution, no synthesized patch, and only change-shaped evidence is shown (file path, action, line counts — never file content). A human, or an MCP-connected agent, decides whether to act. See [Known limits](#known-limits) for what's explicitly out of scope.
 
 ## Why it exists
 
@@ -117,7 +130,9 @@ SessionIds may contain provider prefixes (`opencode:ses_abc...`). The filesystem
 - Codex ingester: complete
 - OpenClaw ingester: complete (fixture-validated; real-vault smoke test pending)
 - Aladeen's own blueprint runs → trace store: complete
-- MCP server bundle: complete (`aladeen-mcp` bin; 2 tools + 2 resources)
+- MCP server bundle: complete (`aladeen-mcp` bin; read-only tools + resources)
+- Observability (ingest + report + fingerprint buckets + read-only replay + MCP): complete
+- Learning layer / actionable replay (`suggest_remedy`, `worktree_collision` known-fix + tiered evidence): landing — read-only suggestions only, no auto-execution. The evidence tier returns `none` for most buckets on small stores (expected). See [Known limits](#known-limits)
 - Hermes ingester: planned (gated on `~/.hermes/state.db` schema inspection)
 - Gemini CLI ingester: planned (gated on confirming actual storage path)
 - jcode ingester: planned (gated on upstream-repo inspection)
@@ -126,10 +141,13 @@ See `ROADMAP.md` for the full plan, including the canonical ingester contract an
 
 The blueprint engine that originally lived here (DAG runner, deterministic + agentic nodes, worktree isolation) is still in `src/engine/`, `src/blueprints/`, `src/isolation/`, and `src/adapters/`. It's been demoted from the project identity but is kept runnable because the runs it produces are training data for the observability layer.
 
+<a id="known-limits"></a>
+
 ## Known limits
 
 - Tool names not normalized across providers (`Write` vs `write`). Tool usage rollup treats them as distinct.
-- Most fingerprint buckets are still size 1 on small ingested datasets — bucket sizes grow with more sessions, but auto-replay ("suggest the blueprint that fixed this shape") needs both more data and a blueprint↔trace link that doesn't exist yet.
+- Most fingerprint buckets are still size 1 on small ingested datasets, so the learning layer's data-mined suggestions are usually tiered **low** or **none** rather than confident — bucket sizes grow with more sessions. The only high-confidence suggestion today is the rule-encoded **`worktree_collision`** known fix; the `lint_loop` rule is armed but not yet emitted by any ingester on real data.
+- **Auto-replay — Aladeen running the fix itself — is explicitly out of scope for v1.** Remedy suggestions are read-only: an ask, the tools/files a resolving session used, and a known-fix pointer where one exists. Acting on them is the human's or MCP-connected agent's decision. Letting Aladeen execute would make it the orchestrator the project deliberately stopped being.
 - Error classifier mostly defaults to `tool_error`. Heuristic patterns will be refined as more session data accumulates.
 - Wall-clock duration is preserved alongside active duration for reference; resumed-across-days sessions report sensible numbers via `activeDurationMs`.
 

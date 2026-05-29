@@ -332,6 +332,29 @@ a { color: var(--accent); }
 .replay-btn:hover { filter: brightness(1.1); }
 .replay-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
+/* ── Remedy card (actionable replay) ─────────────────────────────────── */
+
+.remedy-badge {
+  display: inline-block; font-family: var(--font-display); font-size: var(--fs-caption);
+  letter-spacing: 0.08em; padding: 1px 7px; margin-left: 6px; border: 1px solid currentColor;
+  vertical-align: 1px;
+}
+.remedy-badge.tier-known-fix { color: var(--ok); }
+.remedy-badge.tier-medium    { color: var(--accent); }
+.remedy-badge.tier-low       { color: var(--warn); }
+.remedy-badge.tier-none      { color: var(--dim); }
+.remedy-guardrail {
+  color: var(--dim); font-size: var(--fs-caption); border-left: 2px solid rgba(255,176,0,0.3);
+  padding-left: var(--sp-2); margin: var(--sp-2) 0;
+}
+.interface .change-shaped { color: var(--dim); }
+.raw-link {
+  color: var(--accent); cursor: pointer; border-bottom: 1px dotted var(--accent);
+  font-size: var(--fs-caption); display: inline-block; margin-top: var(--sp-2);
+}
+.raw-link:hover { color: var(--replay-to); }
+.raw-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
 /* ── Loop detector ───────────────────────────────────────────────────── */
 
 .loop { text-align: center; }

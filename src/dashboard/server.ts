@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { IngestStorage } from '../observability/storage.js';
 import { replayFingerprint } from '../observability/replay.js';
+import { suggestRemedy } from '../observability/remedy.js';
 import { buildOverview } from './api.js';
 
 // The FLIGHT RECORDER server. A thin, read-only `node:http` shell over the
@@ -142,6 +143,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, ctx: 
       fingerprint: result.fingerprint,
       matchCount: result.matchedDigests.length,
       markdown: result.markdown,
+    });
+    return;
+  }
+
+  if (pathname.startsWith('/api/remedy/')) {
+    const fp = pathname.slice('/api/remedy/'.length);
+    const r = await suggestRemedy(fp, ctx.storage, { maxResolvedSamples: 3 });
+    sendJson(res, r.failingDigests.length > 0 ? 200 : 404, {
+      fingerprint: r.fingerprint,
+      subSignature: r.subSignature,
+      tier: r.tier,
+      guardrail: r.guardrail,
+      coverageNote: r.coverageNote,
+      ruleMatches: r.ruleMatches,
+      resolvedSiblings: r.resolvedSiblings,
+      nFailed: r.nFailed,
+      nResolved: r.nResolved,
+      markdown: r.markdown,
     });
     return;
   }

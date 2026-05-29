@@ -99,4 +99,50 @@ describe('dashboard server', () => {
     const res = await fetch(`${url}api/nope`);
     expect(res.status).toBe(404);
   });
+
+  it('GET /api/remedy returns a known-fix remedy for the worktree_collision bucket', async () => {
+    const { url } = await bootServer();
+    const res = await fetch(`${url}api/remedy/deadbeefdeadbeef`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.tier).toBe('known-fix');
+    expect(body.ruleMatches.length).toBeGreaterThanOrEqual(1);
+    for (const k of ['subSignature', 'guardrail', 'coverageNote', 'markdown', 'nFailed', 'nResolved']) {
+      expect(body).toHaveProperty(k);
+    }
+  });
+
+  it('GET /api/remedy returns tier none for an empty-subSignature failing bucket', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'aladeen-dash-'));
+    tmpdirs.push(dir);
+    const storage = new IngestStorage(dir);
+    await storage.writeDigest({
+      ...digest, sessionId: 'empty', patternFingerprint: 'empty00000000000',
+      outcome: 'gave_up', toolFailureCount: 0,
+      errorCounts: {} as RunDigest['errorCounts'],
+    });
+    const handle = await startDashboardServer({ storage, host: '127.0.0.1', port: 0, repoRoot: dir });
+    handles.push(handle);
+    const res = await fetch(`${handle.url}api/remedy/empty00000000000`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.tier).toBe('none');
+    expect(body.nResolved).toBe(0);
+    expect(body.guardrail).toContain('No comparable resolved session in your history yet');
+  });
+
+  it('GET /api/remedy 404s an unknown fingerprint; POST is 405', async () => {
+    const { url } = await bootServer();
+    expect((await fetch(`${url}api/remedy/no-such-fp`)).status).toBe(404);
+    expect((await fetch(`${url}api/remedy/deadbeefdeadbeef`, { method: 'POST' })).status).toBe(405);
+  });
+
+  it('REGRESSION: /api/replay/:fp shape is unchanged', async () => {
+    const { url } = await bootServer();
+    const res = await fetch(`${url}api/replay/deadbeefdeadbeef`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Object.keys(body).sort()).toEqual(['fingerprint', 'markdown', 'matchCount']);
+    expect(body.matchCount).toBe(1);
+  });
 });
