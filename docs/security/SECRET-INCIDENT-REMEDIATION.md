@@ -67,16 +67,19 @@ is identical.
 
 ### `src/observability/scrubber.test.ts` — replace lines 5-18
 
-Current (lines 5-18):
+Current (lines 5-18) — the four fixtures are shown **masked** here (this runbook must not reprint a
+full secret-shaped token, per the note at the top). The original file held them as contiguous
+literals, which is exactly what the patch below removes — and why a `.md` that quoted them verbatim
+would itself trip the scanners:
 
 ```ts
   it('redacts known secret patterns', () => {
     const s = new Scrubber({ homeDir: '/home/test' });
     const cases = [
-      'sk-ant-api03-abcdefghijklmnopqrstuvwxyzABCDEF12345',
-      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
-      'AKIAIOSFODNN7EXAMPLE',
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk',
+      'sk-ant-api03-…(46-char sequential-alphabet body)', // anthropic-key
+      'ghp_…(36-char a-z0-9 body)',                        // github-pat (GG-flagged)
+      'AKIA…(AWS published doc example id)',               // aws
+      'eyJhbGci…(jwt.io textbook 3-segment token)',        // jwt (GG-flagged)
     ];
     for (const value of cases) {
       const { text } = s.scrubMessage(`token=${value} end`);
