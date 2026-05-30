@@ -56,9 +56,11 @@
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
     "ink": "^6.8.0",
-    "node-pty": "^1.1.0",
     "react": "^19.2.4",
     "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

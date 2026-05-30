@@ -1,14 +1,10 @@
 #!/usr/bin/env node
-import * as React from 'react';
-import { render } from 'ink';
 import { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BlueprintSchema } from './engine/types.js';
 import type { Blueprint, ExecutionState } from './engine/types.js';
 import { StatePersistence } from './engine/state.js';
-import AladeenApp from './tui/App.js';
-import SetupWizard from './tui/setup/SetupWizard.js';
 import { createImplementFeatureLocalBlueprint } from './blueprints/index.js';
 import { createLocalFirstRunnerOptions } from './engine/local-runner-options.js';
 import { bucketFailures } from './engine/failure-buckets.js';
@@ -24,6 +20,24 @@ import { formatReport } from './observability/report.js';
 import { replayFingerprint } from './observability/replay.js';
 import { suggestRemedy } from './observability/remedy.js';
 import { runIngestPipeline } from './observability/ingest-runner.js';
+
+// The interactive TUI and blueprint runner pull in Ink/React and the optional
+// native `node-pty` dependency (which has no Linux prebuild). Load them lazily so
+// the observability commands (ingest/report/replay/remedy) and the MCP server run
+// even when node-pty isn't installed; only the interactive commands require it.
+async function loadTui(): Promise<typeof import('./tui/launch.js')> {
+  try {
+    return await import('./tui/launch.js');
+  } catch (err) {
+    console.error(
+      'The interactive UI and blueprint runner need the optional "node-pty" dependency, which is not installed.\n' +
+        'Reinstall on a machine with a C/C++ build toolchain (Python 3 + make + g++ on Linux), or just use the\n' +
+        'observability commands — ingest, report, replay, remedy — and the `aladeen-mcp` server, which do not need it.\n' +
+        `\nUnderlying error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(1);
+  }
+}
 
 const program = new Command();
 
@@ -43,7 +57,7 @@ program
       process.exit(1);
     }
     console.clear();
-    render(<SetupWizard scope={opts.scope as 'global' | 'project'} repoRoot={opts.repoRoot} />);
+    (await loadTui()).launchSetup({ scope: opts.scope as 'global' | 'project', repoRoot: opts.repoRoot });
   });
 
 program
@@ -62,7 +76,7 @@ program
       await loadSecretsIntoEnv();
       if (!opts.skipSetupCheck && !(await configExists(opts.repoRoot))) {
         console.clear();
-        render(<SetupWizard repoRoot={opts.repoRoot} />);
+        (await loadTui()).launchSetup({ repoRoot: opts.repoRoot });
         return;
       }
 
@@ -97,14 +111,12 @@ program
 
       const runnerOptions = opts.localFirst ? createLocalFirstRunnerOptions(opts.repoRoot) : undefined;
       console.clear();
-      render(
-        <AladeenApp
-          blueprint={blueprint}
-          resumeState={resumeState}
-          repoRoot={opts.repoRoot}
-          runnerOptions={runnerOptions}
-        />
-      );
+      (await loadTui()).launchApp({
+        blueprint,
+        resumeState,
+        repoRoot: opts.repoRoot,
+        runnerOptions,
+      });
     } catch (err) {
       console.error(`Failed to load blueprint: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -131,13 +143,11 @@ program
     });
     const runnerOptions = createLocalFirstRunnerOptions(opts.repoRoot);
     console.clear();
-    render(
-      <AladeenApp
-        blueprint={blueprint}
-        repoRoot={opts.repoRoot}
-        runnerOptions={runnerOptions}
-      />
-    );
+    (await loadTui()).launchApp({
+      blueprint,
+      repoRoot: opts.repoRoot,
+      runnerOptions,
+    });
   });
 
 program
@@ -159,14 +169,12 @@ program
     const blueprint: Blueprint = result.data as Blueprint;
     const runnerOptions = opts.localFirst ? createLocalFirstRunnerOptions(opts.repoRoot) : undefined;
     console.clear();
-    render(
-      <AladeenApp
-        blueprint={blueprint}
-        resumeState={resumeState}
-        repoRoot={opts.repoRoot}
-        runnerOptions={runnerOptions}
-      />
-    );
+    (await loadTui()).launchApp({
+      blueprint,
+      resumeState,
+      repoRoot: opts.repoRoot,
+      runnerOptions,
+    });
   });
 
 program
@@ -462,9 +470,9 @@ program
 program
   .command('tui', { isDefault: true })
   .description('Launch the interactive multi-CLI TUI')
-  .action(() => {
+  .action(async () => {
     console.clear();
-    render(<AladeenApp />);
+    (await loadTui()).launchApp();
   });
 
 // Encodes the cwd into the ~/.claude/projects/<encoded>/ folder name. The
