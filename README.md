@@ -73,7 +73,7 @@ A single `aladeen report` gives you:
 
 The first slice of the learning layer turns the read-only drill-down into a **read-only suggestion**. Given a failing pattern, Aladeen looks for prior sessions that hit the same `(agent + error class)` shape and later completed, and surfaces what they were asked, the tools they used, and the files they touched — plus a **known-fix** pointer when the failure is a solved bug in this repo's own engine (e.g. `worktree_collision` → install deps in the worktree before the gate, the `bootstrap-deps` node in `src/blueprints/implement-feature.ts`; a lint/typecheck **edit loop** → bounded retry, `maxTotalRetries` in the same blueprint — the linter's `--fix` capability in `src/engine/verifiers/lint.ts` is available but not wired into this blueprint).
 
-Confidence is an honest tier — **known-fix** / **low** / **none** — and every suggestion prints its denominators (how many failed sessions, how many resolved siblings). Most buckets are still small, so **none** ("no comparable resolved session in your history yet — read-only drill-down only") is the common, expected answer. Today the only live known-fix on a typical store is `worktree_collision`; the `lint_loop` rule is armed but only fires once a session is classified with an actual edit loop.
+Confidence is an honest tier — **known-fix** / **medium** / **low** / **none** — and every suggestion prints its denominators (how many failed sessions, how many resolved siblings). Most buckets are still small, so **none** ("no comparable resolved session in your history yet — read-only drill-down only") is the common, expected answer. Today the only live known-fix on a typical store is `worktree_collision`; the `lint_loop` rule is armed but only fires once a session is classified with an actual edit loop.
 
 **Aladeen suggests; it never runs the agent.** This is not orchestration: there is no auto-execution, no synthesized patch, and only change-shaped evidence is shown (file path, action, line counts — never file content). A human, or an MCP-connected agent, decides whether to act. See [Known limits](#known-limits) for what's explicitly out of scope.
 
@@ -155,6 +155,8 @@ The blueprint engine that originally lived here (DAG runner, deterministic + age
 ## Requirements
 
 - Node 20+
+- **No native dependency for the core.** The observability commands (`ingest` / `report` / `replay` / `remedy`) and the `aladeen-mcp` server are pure JS — they run anywhere Node 20+ does.
+- The interactive TUI and blueprint runner (`aladeen run` / `tui` / `setup`) use [`node-pty`](https://github.com/microsoft/node-pty), an **optional** native dependency with prebuilt binaries for macOS and Windows. On Linux it compiles from source (needs Python 3 + a C/C++ toolchain); if it can't build, `npm install` still succeeds and only those interactive commands are unavailable.
 - `sqlite3` on PATH (only needed for the opencode ingester)
 - TypeScript / Vitest / Zod (installed via `npm install`)
 - `gitleaks` (optional) — powers the pre-commit secret scan (`.githooks/pre-commit`, auto-activated by `npm install`); CI scans regardless. See [`docs/security/SECRET-INCIDENT-REMEDIATION.md`](docs/security/SECRET-INCIDENT-REMEDIATION.md).
