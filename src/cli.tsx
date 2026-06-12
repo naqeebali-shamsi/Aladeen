@@ -47,8 +47,8 @@ const program = new Command();
 
 program
   .name('aladeen')
-  .version('0.2.0')
-  .description('Observability + learning layer for agent CLIs. Ingest session logs, surface failure patterns, replay known-good blueprints, mine lessons.');
+  .version('0.3.0')
+  .description('Observability + learning layer for agent CLIs. Ingest session logs, surface failure patterns, replay known-good blueprints, mine lessons, measure whether guardrails work.');
 
 program
   .command('setup')

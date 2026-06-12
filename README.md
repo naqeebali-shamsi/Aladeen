@@ -55,6 +55,7 @@ The server runs locally over stdio, reads `<cwd>/.aladeen/ingested/`, and expose
 - **Tool** `query_failure_patterns({ all?, limit? })` — the same report `aladeen report` produces
 - **Tool** `replay_fingerprint({ fingerprint, max_sessions? })` — markdown drill-down for one bucket
 - **Tool** `suggest_remedy({ fingerprint, max_samples? })` — a read-only remedy suggestion for a failing pattern: prior sessions of the same shape that later completed, a known-fix pointer where one exists, and an honest confidence tier. It **suggests, never executes** — see [Actionable replay](#actionable-replay-landing).
+- **Tool** `query_lessons({ include_retired?, limit? })` — the decay-ranked lessons Aladeen has mined across sessions, with lifecycle status and (for actuated lessons) the observational recurrence measurement. Read these at the start of a task to skip the mistakes that recurred before. Knowledge only; executes nothing.
 - **Resource** `aladeen://digests` — JSON of every stored `RunDigest`
 - **Resource** `aladeen://sessions/{sessionId}` — full `SessionTrace` for one session
 
@@ -80,20 +81,22 @@ Confidence is an honest tier — **known-fix** / **medium** / **low** / **none**
 
 **Aladeen suggests; it never runs the agent.** This is not orchestration: there is no auto-execution, no synthesized patch, and only change-shaped evidence is shown (file path, action, line counts — never file content). A human, or an MCP-connected agent, decides whether to act. See [Known limits](#known-limits) for what's explicitly out of scope.
 
-### Learning module (v0.2.0)
+### Learning module
 
 The second slice of the learning layer reads the same ingested sessions and mines **lessons** — recurring shapes that show up across sessions and providers. Five deterministic detectors (no LLM, no cloud) cover the load-bearing cases: repeated tool failures, edit loops, user interrupts mid-action, error storms, and "succeeded but thrashed" sessions where the outcome column says success and the path says retry-storm.
 
 Each lesson carries event-level evidence refs back into stored traces, gets re-ranked on every `learn` run by a forgetting curve (importance × decay; math ported from FadeMem, arXiv 2601.18642), and graduates `hypothesis → corroborated → actuated` only as distinct sessions corroborate it. The store is plain JSON under `.aladeen/lessons/` — gitignored, machine-local, schema-versioned.
 
 ```
-aladeen learn                       # mine + consolidate + rank; suggests nothing for free
-aladeen lessons                     # ranked list with retention, status, evidence
+aladeen learn                       # mine + consolidate + rank + measure; suggests nothing for free
+aladeen lessons                     # ranked list with retention, status, evidence, measurement
 aladeen learn --apply               # write top lessons into AGENTS.md fenced block
 aladeen lessons --export-md <dir>   # semantic Markdown export (Obsidian / basic-memory compatible)
 ```
 
 `--apply` is opt-in and bounded: only **corroborated** lessons (≥2 distinct sessions) qualify, the block is capped at 10 rules / 2500 chars (to fit Claude Code's 200-line / 25KB MEMORY.md budget head-room), and it lives between Aladeen-owned markers (`<!-- aladeen:learned:start/end -->`) so content outside the fence is never touched. A corrupt fence aborts rather than guesses. The decision to build this in-house instead of adopting a memory framework (Mem0, Letta, Zep/Graphiti, LangMem, Cognee, A-MEM, MemOS, basic-memory) is recorded as ADR-0013, backed by a 13-system primary-source survey.
+
+**Did the guardrail work? (v0.3.0)** Once a lesson is actuated, every later `learn` run **measures** it: the fraction of sessions exhibiting its failure shape *before* the rule went into AGENTS.md vs *after*, split by each session's own timestamp. A material drop (≥50% relative, ≥5 post-actuation sessions) flips the lesson `actuated → verified`. This is **observational, not causal** — a common shape regresses to the mean on its own, so every rendered measurement carries its denominators, its excluded-no-timestamp count, and that caveat in plain sight (ADR-0014). On a freshly bootstrapped store the verdict is `insufficient-data` for everything until sessions accrue *after* the rule went live — the machinery is the deliverable; the signal arrives with use.
 
 ## Why it exists
 
@@ -149,10 +152,11 @@ SessionIds may contain provider prefixes (`opencode:ses_abc...`). The filesystem
 - Codex ingester: complete
 - OpenClaw ingester: complete (fixture-validated; real-vault smoke test pending)
 - Aladeen's own blueprint runs → trace store: complete
-- MCP server bundle: complete (`aladeen-mcp` bin; read-only tools + resources)
+- MCP server bundle: complete (`aladeen-mcp` bin; read-only tools + resources, incl. `query_lessons`)
 - Observability (ingest + report + fingerprint buckets + read-only replay + MCP): complete
 - Learning layer — actionable replay (`suggest_remedy`, `worktree_collision` known-fix + tiered evidence): complete (read-only suggestions only, no auto-execution; evidence tier returns `none` for most buckets on small stores — expected. See [Known limits](#known-limits))
-- Learning module (`aladeen learn` / `lessons`, Tier-0 detectors, FadeMem-style decay, fenced AGENTS.md actuation, semantic Markdown export): complete in v0.2.0. Post-actuation recurrence measurement (the step that turns `actuated → verified`) and Tier-1 LLM reflection over flagged sessions are planned next, behind v0.2.x classifier refinement
+- Learning module (`aladeen learn` / `lessons`, Tier-0 detectors, FadeMem-style decay, fenced AGENTS.md actuation, semantic Markdown export): complete in v0.2.0
+- Recurrence measurement — observational before/after that flips `actuated → verified`, plus the `query_lessons` MCP tool: complete in v0.3.0 (observational, not causal — see ADR-0014; reads `insufficient-data` until post-actuation sessions accrue). Tier-1 LLM reflection over flagged sessions is planned next, behind v0.2.x classifier refinement
 - Hermes ingester: planned (gated on `~/.hermes/state.db` schema inspection)
 - Gemini CLI ingester: planned (gated on confirming actual storage path)
 - jcode ingester: planned (gated on upstream-repo inspection)
