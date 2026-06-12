@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildServer } from './server.js';
 import { IngestStorage } from '../observability/storage.js';
+import { LessonStore } from '../learning/store.js';
+import { consolidate } from '../learning/consolidate.js';
+import type { LessonCandidate } from '../learning/detectors.js';
 import type { RunDigest, SessionTrace } from '../observability/session-trace.js';
 
 function digest(over: Partial<RunDigest> = {}): RunDigest {
@@ -67,7 +70,7 @@ interface Captured {
   resources: Map<string, { handler: ResourceHandler }>;
 }
 
-async function captureRegistrations(storage: IngestStorage): Promise<Captured> {
+async function captureRegistrations(storage: IngestStorage, lessonStore?: LessonStore): Promise<Captured> {
   const captured: Captured = { tools: new Map(), resources: new Map() };
 
   // Build a server normally, then intercept by patching prototype before construction.
@@ -94,12 +97,41 @@ async function captureRegistrations(storage: IngestStorage): Promise<Captured> {
     return (origRegisterResource as unknown as (...a: unknown[]) => unknown).apply(this, args);
   } as typeof McpServer.prototype.registerResource;
   try {
-    buildServer({ storage });
+    buildServer({ storage, lessonStore });
   } finally {
     McpServer.prototype.registerTool = origRegisterTool;
     McpServer.prototype.registerResource = origRegisterResource;
   }
   return captured;
+}
+
+// Build a real lesson on disk via the consolidation path so the fixture is
+// schema-valid by construction (not a hand-rolled literal that can drift).
+function lessonCandidate(sessionId: string): LessonCandidate {
+  return {
+    detectorId: 'repeated-tool-failure',
+    detectorVersion: '1',
+    sessionId,
+    candidateKey: 'repeated-tool-failure|Bash|timeout',
+    dims: { toolName: 'Bash', errorClass: 'timeout' },
+    statement: 'Bash calls fail repeatedly with timeout.',
+    category: 'model-mistake',
+    agentCli: 'claude-code',
+    evidence: [{ sessionId, seq: 1 }],
+    observedAt: '2026-05-01T00:00:00.000Z',
+    patternFingerprint: 'fp-1',
+  };
+}
+
+async function seedLessons(repoRoot: string): Promise<LessonStore> {
+  const store = new LessonStore(repoRoot);
+  const { lessons } = consolidate(
+    [],
+    [lessonCandidate('s1'), lessonCandidate('s2')],
+    { now: new Date('2026-06-12T12:00:00.000Z') },
+  );
+  await store.writeAll(lessons);
+  return store;
 }
 
 describe('MCP server', () => {
@@ -270,6 +302,55 @@ describe('MCP server', () => {
       const cfg = captured.tools.get('suggest_remedy')!.config as { description: string };
       expect(cfg.description.toLowerCase()).toContain('suggests');
       expect(cfg.description.toLowerCase()).toContain('never executes');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('query_lessons returns ranked lessons with markdown + structured content', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      const lessonStore = await seedLessons(tmp);
+      const captured = await captureRegistrations(storage, lessonStore);
+      const tool = captured.tools.get('query_lessons');
+      expect(tool).toBeDefined();
+
+      const r = await tool!.handler({});
+      expect(r.content[0].text).toContain('Bash calls fail repeatedly with timeout');
+      expect(r.structuredContent.totalLessons).toBe(1);
+      expect(r.structuredContent.returned).toBe(1);
+      const lessons = r.structuredContent.lessons as Array<Record<string, unknown>>;
+      expect(lessons[0].id).toBeTruthy();
+      expect(lessons[0].status).toBe('corroborated'); // 2 distinct sessions
+      expect(lessons[0].statement).toContain('Bash');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('query_lessons returns an empty-but-valid result when nothing has been learned', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      const captured = await captureRegistrations(storage, new LessonStore(tmp));
+      const r = await captured.tools.get('query_lessons')!.handler({});
+      expect(r.content[0].text).toContain('No lessons yet');
+      expect(r.structuredContent.totalLessons).toBe(0);
+      expect(r.structuredContent.returned).toBe(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('query_lessons honors the limit', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      const lessonStore = await seedLessons(tmp);
+      const captured = await captureRegistrations(storage, lessonStore);
+      const r = await captured.tools.get('query_lessons')!.handler({ limit: 1 });
+      expect((r.structuredContent.lessons as unknown[]).length).toBeLessThanOrEqual(1);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

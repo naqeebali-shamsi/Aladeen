@@ -4,6 +4,12 @@ import type { DecayParams } from './decay.js';
 import { runDetectors, type LessonCandidate } from './detectors.js';
 import { consolidate } from './consolidate.js';
 import { LessonStore } from './store.js';
+import {
+  measureLessons,
+  formatMeasurement,
+  type SessionObservation,
+  type MeasureParams,
+} from './measure.js';
 
 // `aladeen learn` orchestration: ingested store -> Tier-0 detectors ->
 // consolidation -> decay-ranked lesson store. Read-only over the ingested
@@ -22,6 +28,9 @@ export interface LearnSummary {
   resurrected: number;
   totalLessons: number;
   activeLessons: number;
+  // Recurrence measurement over actuated lessons.
+  measured: number;
+  verified: number;
 }
 
 export interface LearnResult {
@@ -32,6 +41,7 @@ export interface LearnResult {
 export interface LearnOptions {
   now?: Date;
   params?: DecayParams;
+  measureParams?: MeasureParams;
 }
 
 export async function runLearn(
@@ -43,6 +53,10 @@ export async function runLearn(
 
   const digests = await storage.listDigests();
   const candidates: LessonCandidate[] = [];
+  // One observation per scanned session, feeding recurrence measurement.
+  // Built from the SAME detector pass that feeds consolidation, so the
+  // candidateKeys here match exactly what lessons dedup on.
+  const observations: SessionObservation[] = [];
   let tracesMissing = 0;
 
   for (const digest of digests) {
@@ -51,14 +65,25 @@ export async function runLearn(
       tracesMissing += 1;
       continue;
     }
-    candidates.push(...runDetectors({ trace, digest }));
+    const sessionCandidates = runDetectors({ trace, digest });
+    candidates.push(...sessionCandidates);
+    observations.push({
+      sessionId: trace.sessionId,
+      timestampMs: parseTimestamp(trace.endedAt ?? trace.startedAt),
+      candidateKeys: new Set(sessionCandidates.map((c) => c.candidateKey)),
+    });
   }
 
   const existing = await store.list();
   const result = consolidate(existing, candidates, { now, params: opts.params });
-  await store.writeAll(result.lessons);
 
-  const active = result.lessons.filter((l) => l.status !== 'retired');
+  // Measure actuated lessons against the post-actuation session window and
+  // flip improved ones to verified. Runs after consolidation so it sees the
+  // freshest recurrence counts.
+  const measured = measureLessons(result.lessons, observations, now, opts.measureParams);
+  await store.writeAll(measured.lessons);
+
+  const active = measured.lessons.filter((l) => l.status !== 'retired');
   return {
     summary: {
       sessionsScanned: digests.length,
@@ -70,11 +95,19 @@ export async function runLearn(
       demoted: result.demoted,
       retired: result.retired,
       resurrected: result.resurrected,
-      totalLessons: result.lessons.length,
+      totalLessons: measured.lessons.length,
       activeLessons: active.length,
+      measured: measured.measured,
+      verified: measured.verified,
     },
-    lessons: result.lessons,
+    lessons: measured.lessons,
   };
+}
+
+function parseTimestamp(iso: string | undefined): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 export function formatLearnSummary(s: LearnSummary): string {
@@ -88,6 +121,12 @@ export function formatLearnSummary(s: LearnSummary): string {
   ];
   if (s.promoted > 0 || s.demoted > 0) {
     lines.push(`Layers: ${s.promoted} promoted to long-term, ${s.demoted} demoted to short-term`);
+  }
+  if (s.measured > 0) {
+    // `measured` includes already-verified lessons re-measured this run, so the
+    // label must not claim they are all merely "actuated".
+    lines.push(`Measured ${s.measured} actuated/verified lesson(s) for recurrence`
+      + (s.verified > 0 ? `, ${s.verified} newly verified (post-actuation recurrence dropped)` : ' (accruing post-actuation sessions)'));
   }
   lines.push('', 'Next: `aladeen lessons` to review, `aladeen learn --apply` to write top lessons into AGENTS.md.');
   return lines.join('\n');
@@ -126,12 +165,14 @@ function formatLessonLine(l: Lesson): string {
   const lastSeen = l.recurrence.lastSeenAt ? ` · last seen ${l.recurrence.lastSeenAt.slice(0, 10)}` : '';
   const meta = `id ${l.id} · ${l.recurrence.sessionCount} session(s), ${l.recurrence.eventCount} event(s)`
     + `${lastSeen} · ${l.decay.layer}-term · evidence ${l.evidence.length} ref(s)`;
-  return [
+  const lines = [
     `  ${retentionBar(l.decay.retention)} ${l.decay.retention.toFixed(2)}  ${l.status.toUpperCase()}  [${l.category}]  ${scope}`,
     `      ${l.statement}`,
     `      ${meta}`,
-    '',
-  ].join('\n');
+  ];
+  if (l.measurement) lines.push(`      ${formatMeasurement(l.measurement)}`);
+  lines.push('');
+  return lines.join('\n');
 }
 
 function retentionBar(retention: number): string {

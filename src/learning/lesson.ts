@@ -86,6 +86,42 @@ export const ActuationSchema = z.object({
 });
 export type Actuation = z.infer<typeof ActuationSchema>;
 
+// Output of measure.ts. Observational, NOT causal: it reports the fraction of
+// sessions exhibiting this lesson's shape before vs after actuation, split by
+// real session timestamp against actuation.appliedAt. A drop is evidence the
+// guardrail MAY be working; it is not proof (the shape was actuated because it
+// was common, so some regression to the mean is expected, and session mix
+// drifts for unrelated reasons). The UI must render it with denominators and
+// never claim causation. Only `improved` with >= MIN_POST_SESSIONS flips a
+// lesson actuated -> verified; nothing here ever retires a lesson.
+export const MEASUREMENT_VERDICTS = [
+  'insufficient-data',  // too few post-actuation sessions to say anything
+  'improved',           // post rate fell materially below pre rate
+  'unchanged',          // within the noise band
+  'regressed',          // post rate rose above pre rate (surface, never auto-act)
+] as const;
+export type MeasurementVerdict = (typeof MEASUREMENT_VERDICTS)[number];
+
+export const MeasurementSchema = z.object({
+  computedAt: z.string().datetime(),
+  appliedAt: z.string().datetime(),   // echoed from actuation for self-contained reads
+  preSessions: z.number().int().nonnegative(),
+  preExhibiting: z.number().int().nonnegative(),
+  preRate: z.number().min(0).max(1),
+  postSessions: z.number().int().nonnegative(),
+  postExhibiting: z.number().int().nonnegative(),
+  postRate: z.number().min(0).max(1),
+  // (preRate - postRate) / preRate: the relative change in recurrence.
+  // Positive = recurred LESS after actuation; NEGATIVE = recurred MORE
+  // (regressed). Deliberately NOT bounded to [0,1] like the rates above — it
+  // can go below 0. Absent when preRate is 0 (no baseline to divide by).
+  relativeReduction: z.number().optional(),
+  // Sessions dropped from both windows because the source carried no clock.
+  excludedNoTimestamp: z.number().int().nonnegative(),
+  verdict: z.enum(MEASUREMENT_VERDICTS),
+});
+export type Measurement = z.infer<typeof MeasurementSchema>;
+
 export const LessonSchema = z.object({
   // Bump when this file changes incompatibly (mirrors SessionTrace).
   schemaVersion: z.literal('1'),
@@ -127,6 +163,9 @@ export const LessonSchema = z.object({
   provenance: ProvenanceSchema,
   revisions: z.array(RevisionSchema),
   actuation: ActuationSchema.optional(),
+  // Present only after a measure pass over an actuated lesson. Optional, so
+  // lesson files written by v0.2.0 still parse unchanged (schemaVersion stays 1).
+  measurement: MeasurementSchema.optional(),
   // patternFingerprints (digest.ts) observed alongside this lesson. The
   // future recurrence-measurement step watches these to score actuated
   // lessons; harmless bookkeeping until then.
