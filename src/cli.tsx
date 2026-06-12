@@ -20,6 +20,10 @@ import { formatReport } from './observability/report.js';
 import { replayFingerprint } from './observability/replay.js';
 import { suggestRemedy } from './observability/remedy.js';
 import { runIngestPipeline } from './observability/ingest-runner.js';
+import { runLearn, formatLearnSummary, formatLessons, rankLessons } from './learning/learn.js';
+import { LessonStore } from './learning/store.js';
+import { applyLearnedBlock, markActuated } from './learning/actuate.js';
+import { exportLessonsMarkdown } from './learning/export-md.js';
 
 // The interactive TUI and blueprint runner pull in Ink/React and the optional
 // native `node-pty` dependency (which has no Linux prebuild). Load them lazily so
@@ -441,6 +445,78 @@ program
       process.exit(1);
     }
     console.log(result.markdown);
+  });
+
+program
+  .command('learn')
+  .description('Mine lessons from ingested sessions: deterministic detectors → cross-session consolidation → decay-ranked store (.aladeen/lessons/). Suggests; writes agent guidance only with --apply.')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .option('--apply', 'Write top corroborated lessons into an Aladeen-owned fenced block (default target: AGENTS.md)')
+  .option('--target <path>', 'Actuation file for --apply (overrides the default)')
+  .option('--claude-md', 'Actuate into CLAUDE.md instead of AGENTS.md')
+  .option('--json', 'Print a machine-readable summary')
+  .action(async (opts: {
+    repoRoot: string; apply?: boolean; target?: string; claudeMd?: boolean; json?: boolean;
+  }) => {
+    const storage = new IngestStorage(opts.repoRoot);
+    const store = new LessonStore(opts.repoRoot);
+    const result = await runLearn(storage, store);
+
+    if (result.summary.sessionsScanned === 0) {
+      console.error('No ingested sessions found. Run `aladeen ingest <source>` first.');
+      process.exit(1);
+    }
+
+    let applied: { filePath: string; written: boolean; lessonCount: number } | undefined;
+    if (opts.apply) {
+      const now = new Date();
+      const target = opts.target
+        ?? path.join(opts.repoRoot, opts.claudeMd ? 'CLAUDE.md' : 'AGENTS.md');
+      const applyResult = await applyLearnedBlock(target, result.lessons, now);
+      applied = { filePath: applyResult.filePath, written: applyResult.written, lessonCount: applyResult.lessonCount };
+      if (applyResult.written) {
+        markActuated(applyResult.selected, target, opts.claudeMd ? 'claude-md' : 'agents-md', now);
+        await store.writeAll(applyResult.selected);
+      }
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({ summary: result.summary, applied }, null, 2));
+      return;
+    }
+
+    console.log(formatLearnSummary(result.summary));
+    if (applied) {
+      console.log('');
+      console.log(applied.written
+        ? `Wrote ${applied.lessonCount} lesson(s) into ${applied.filePath} (fenced block — re-run \`learn --apply\` to refresh).`
+        : 'Nothing to apply yet: actuation needs corroborated lessons (>=2 distinct sessions).');
+    }
+  });
+
+program
+  .command('lessons')
+  .description('List learned lessons ranked by decay-weighted retention')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .option('--all', 'Include retired lessons')
+  .option('--json', 'Print raw lesson JSON')
+  .option('--export-md <dir>', 'Export lessons as semantic Markdown notes (Obsidian/basic-memory-compatible)')
+  .action(async (opts: { repoRoot: string; all?: boolean; json?: boolean; exportMd?: string }) => {
+    const store = new LessonStore(opts.repoRoot);
+    const lessons = await store.list();
+
+    if (opts.exportMd) {
+      const count = await exportLessonsMarkdown(lessons, opts.exportMd);
+      console.log(count === 0
+        ? 'No lessons to export. Run `aladeen learn` first.'
+        : `Exported ${count} lesson note(s) to ${opts.exportMd}`);
+      return;
+    }
+    if (opts.json) {
+      console.log(JSON.stringify(rankLessons(lessons), null, 2));
+      return;
+    }
+    console.log(formatLessons(lessons, { includeRetired: opts.all }));
   });
 
 program
