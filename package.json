@@ -1,7 +1,7 @@
 {
   "name": "aladeen",
-  "version": "0.1.0",
-  "description": "Observability and learning layer for agent CLIs (Claude Code, opencode, Codex, OpenClaw). Ingests session logs, classifies failures, replays known-good blueprints.",
+  "version": "0.2.0",
+  "description": "Observability + learning layer for agent CLIs (Claude Code, opencode, Codex, OpenClaw). Ingests session logs, classifies failures, mines recurring lessons, ranks them by a forgetting curve, and writes the top corroborated guardrails into AGENTS.md.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

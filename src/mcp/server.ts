@@ -37,7 +37,7 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
   const storage = opts.storage ?? new IngestStorage(opts.repoRoot ?? process.cwd());
 
   const server = new McpServer(
-    { name: 'aladeen', version: '0.1.0' },
+    { name: 'aladeen', version: '0.2.0' },
     {
       capabilities: {
         tools: {},
