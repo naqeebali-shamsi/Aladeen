@@ -5,6 +5,9 @@ import { formatReport } from '../observability/report.js';
 import { replayFingerprint } from '../observability/replay.js';
 import { suggestRemedy } from '../observability/remedy.js';
 import type { RunDigest } from '../observability/session-trace.js';
+import { LessonStore } from '../learning/store.js';
+import { rankLessons, formatLessons } from '../learning/learn.js';
+import type { Lesson } from '../learning/lesson.js';
 
 // Aladeen as an MCP server. Wraps the same observability primitives the
 // CLI uses (IngestStorage / formatReport / replayFingerprint) so any
@@ -31,13 +34,16 @@ export interface BuildServerOptions {
   repoRoot?: string;
   // Override the storage; tests prefer this over file-system mocking.
   storage?: IngestStorage;
+  // Override the lesson store (.aladeen/lessons). Same repoRoot fallback.
+  lessonStore?: LessonStore;
 }
 
 export function buildServer(opts: BuildServerOptions = {}): McpServer {
   const storage = opts.storage ?? new IngestStorage(opts.repoRoot ?? process.cwd());
+  const lessonStore = opts.lessonStore ?? new LessonStore(opts.repoRoot ?? process.cwd());
 
   const server = new McpServer(
-    { name: 'aladeen', version: '0.2.0' },
+    { name: 'aladeen', version: '0.3.0' },
     {
       capabilities: {
         tools: {},
@@ -48,8 +54,10 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
         'Use query_failure_patterns to see which failure shapes have recurred in this',
         'repo. Use replay_fingerprint(fp) to drill into a specific bucket and see',
         'concrete file/tool/error aggregates. Use suggest_remedy(fp) for an actionable',
-        'read-only remedy; it suggests, never executes. Resources expose the raw digests',
-        'and individual session traces.',
+        'read-only remedy; it suggests, never executes. Use query_lessons to read the',
+        'distilled, decay-ranked guardrails Aladeen has mined across sessions — read',
+        'these at the start of a task to avoid the mistakes that recurred before.',
+        'Resources expose the raw digests and individual session traces.',
       ].join(' '),
     },
   );
@@ -179,6 +187,46 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
     },
   );
 
+  // ── Tool 4: query_lessons ─────────────────────────────────────────────
+  server.registerTool(
+    'query_lessons',
+    {
+      title: 'Query learned lessons',
+      description:
+        'Returns the decay-ranked lessons Aladeen has mined from this repo\'s agent ' +
+        'session logs — recurring failure shapes (repeated tool failures, edit loops, ' +
+        'interrupts, error storms, thrash) with their evidence counts, lifecycle status ' +
+        '(hypothesis / corroborated / actuated / verified), and — for actuated lessons — ' +
+        'an observational before/after recurrence measurement. Read these at the start of ' +
+        'a task to avoid the mistakes that recurred before. Knowledge only; it executes nothing.',
+      inputSchema: {
+        include_retired: z.boolean().optional()
+          .describe('Include lessons that decayed below the retention floor. Default false.'),
+        limit: z.number().int().positive().max(100).optional()
+          .describe('Max lessons to return (highest retention first). Default 25.'),
+      },
+    },
+    async (input) => {
+      const all = await lessonStore.list();
+      const active = input.include_retired ? all : all.filter((l) => l.status !== 'retired');
+      const ranked = rankLessons(active).slice(0, input.limit ?? 25);
+      const text = ranked.length === 0
+        ? 'No lessons yet. Run `aladeen ingest <source>` then `aladeen learn`.'
+        : formatLessons(ranked, { includeRetired: input.include_retired });
+      // isError intentionally absent — an empty lesson store is a valid initial
+      // state, not a lookup failure (unlike replay/remedy on an unknown fp).
+      return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+          totalLessons: all.length,
+          activeLessons: all.filter((l) => l.status !== 'retired').length,
+          returned: ranked.length,
+          lessons: ranked.map(toStructuredLesson),
+        },
+      };
+    },
+  );
+
   // ── Resource 1: aladeen://digests ─────────────────────────────────────
   server.registerResource(
     'digests',
@@ -247,4 +295,38 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
 
 function countDistinctFingerprints(digests: RunDigest[]): number {
   return new Set(digests.map((d) => d.patternFingerprint)).size;
+}
+
+// Machine-actionable lesson form so a calling agent can act without scraping
+// markdown. Evidence is reference-only (sessionId + seq), never file content —
+// the same honesty boundary suggest_remedy holds.
+function toStructuredLesson(l: Lesson) {
+  return {
+    id: l.id,
+    statement: l.statement,
+    category: l.category,
+    status: l.status,
+    scope: l.scope,
+    retention: l.decay.retention,
+    layer: l.decay.layer,
+    // Counts only — keep the structured path's evidence boundary crisp
+    // (reference-level, no trace timestamps), matching suggest_remedy.
+    recurrence: { sessionCount: l.recurrence.sessionCount, eventCount: l.recurrence.eventCount },
+    evidenceCount: l.evidence.length,
+    // Carry the FULL denominator picture so a calling agent can audit the
+    // verdict without scraping markdown: the gate magnitude (relativeReduction)
+    // and how many sessions were excluded for lacking a clock. A rate without
+    // these can mislead — the honesty invariant demands both.
+    measurement: l.measurement
+      ? {
+          verdict: l.measurement.verdict,
+          preRate: l.measurement.preRate,
+          postRate: l.measurement.postRate,
+          preSessions: l.measurement.preSessions,
+          postSessions: l.measurement.postSessions,
+          relativeReduction: l.measurement.relativeReduction,
+          excludedNoTimestamp: l.measurement.excludedNoTimestamp,
+        }
+      : undefined,
+  };
 }
