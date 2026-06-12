@@ -2,9 +2,9 @@
 
 _Named after the all-purpose word from_ The Dictator _— it means both "positive" and "negative" at once. Fitting for a tool whose whole job is sorting agent sessions into exactly those two piles._
 
-Observability layer for agent CLIs, with a learning layer landing on top.
+Observability + learning layer for agent CLIs.
 
-Aladeen reads the session logs that tools like **Claude Code**, **opencode**, **Codex**, and **OpenClaw** leave behind, normalizes them into a single schema, and **today** produces failure-pattern reports + drill-down replays. A **learning layer** is landing on top of that: for a failing pattern, Aladeen surfaces a read-only remedy — a known-fix pointer when the shape is a solved bug in this repo's own engine, and (as your history grows) the prior sessions that hit the same shape and later completed (see [Actionable replay](#actionable-replay-landing) and [Status](#status)). It doesn't replace your agent — it watches it work and tells you where it keeps getting stuck.
+Aladeen reads the session logs that tools like **Claude Code**, **opencode**, **Codex**, and **OpenClaw** leave behind, normalizes them into a single schema, surfaces failure-pattern reports + drill-down replays, and — new in v0.2.0 — **learns from them**: deterministic detectors mine recurring lesson shapes, a forgetting curve ranks them by importance and recency, and `aladeen learn --apply` writes the top corroborated guardrails into an Aladeen-owned fenced block in `AGENTS.md` so the next session reads them by default. It doesn't replace your agent — it watches it work and tells it where it keeps getting stuck.
 
 ## Install
 
@@ -29,6 +29,9 @@ aladeen ingest aladeen-runs         # parse <repo>/.aladeen/runs/*.json (Aladeen
 aladeen report                      # show failure-pattern buckets across all ingested sessions
 aladeen replay <fingerprint>        # drill into a single bucket: files touched, asks, first failures
 aladeen remedy <fingerprint>        # suggest a read-only remedy: known-fix pointer or prior resolved sessions
+aladeen learn                       # mine lessons from ingested sessions; rank by forgetting curve
+aladeen learn --apply               # write top corroborated lessons into an AGENTS.md fenced block
+aladeen lessons                     # list ranked lessons with evidence counts and decay state
 ```
 
 ## MCP server (in-session queries from any agent)
@@ -51,7 +54,7 @@ The server runs locally over stdio, reads `<cwd>/.aladeen/ingested/`, and expose
 
 - **Tool** `query_failure_patterns({ all?, limit? })` — the same report `aladeen report` produces
 - **Tool** `replay_fingerprint({ fingerprint, max_sessions? })` — markdown drill-down for one bucket
-- **Tool** `suggest_remedy({ fingerprint, max_samples? })` — _(learning layer, landing)_ a read-only remedy suggestion for a failing pattern: prior sessions of the same shape that later completed, a known-fix pointer where one exists, and an honest confidence tier. It **suggests, never executes** — see [Actionable replay](#actionable-replay-landing).
+- **Tool** `suggest_remedy({ fingerprint, max_samples? })` — a read-only remedy suggestion for a failing pattern: prior sessions of the same shape that later completed, a known-fix pointer where one exists, and an honest confidence tier. It **suggests, never executes** — see [Actionable replay](#actionable-replay-landing).
 - **Resource** `aladeen://digests` — JSON of every stored `RunDigest`
 - **Resource** `aladeen://sessions/{sessionId}` — full `SessionTrace` for one session
 
@@ -76,6 +79,21 @@ The first slice of the learning layer turns the read-only drill-down into a **re
 Confidence is an honest tier — **known-fix** / **medium** / **low** / **none** — and every suggestion prints its denominators (how many failed sessions, how many resolved siblings). Most buckets are still small, so **none** ("no comparable resolved session in your history yet — read-only drill-down only") is the common, expected answer. Today the only live known-fix on a typical store is `worktree_collision`; the `lint_loop` rule is armed but only fires once a session is classified with an actual edit loop.
 
 **Aladeen suggests; it never runs the agent.** This is not orchestration: there is no auto-execution, no synthesized patch, and only change-shaped evidence is shown (file path, action, line counts — never file content). A human, or an MCP-connected agent, decides whether to act. See [Known limits](#known-limits) for what's explicitly out of scope.
+
+### Learning module (v0.2.0)
+
+The second slice of the learning layer reads the same ingested sessions and mines **lessons** — recurring shapes that show up across sessions and providers. Five deterministic detectors (no LLM, no cloud) cover the load-bearing cases: repeated tool failures, edit loops, user interrupts mid-action, error storms, and "succeeded but thrashed" sessions where the outcome column says success and the path says retry-storm.
+
+Each lesson carries event-level evidence refs back into stored traces, gets re-ranked on every `learn` run by a forgetting curve (importance × decay; math ported from FadeMem, arXiv 2601.18642), and graduates `hypothesis → corroborated → actuated` only as distinct sessions corroborate it. The store is plain JSON under `.aladeen/lessons/` — gitignored, machine-local, schema-versioned.
+
+```
+aladeen learn                       # mine + consolidate + rank; suggests nothing for free
+aladeen lessons                     # ranked list with retention, status, evidence
+aladeen learn --apply               # write top lessons into AGENTS.md fenced block
+aladeen lessons --export-md <dir>   # semantic Markdown export (Obsidian / basic-memory compatible)
+```
+
+`--apply` is opt-in and bounded: only **corroborated** lessons (≥2 distinct sessions) qualify, the block is capped at 10 rules / 2500 chars (to fit Claude Code's 200-line / 25KB MEMORY.md budget head-room), and it lives between Aladeen-owned markers (`<!-- aladeen:learned:start/end -->`) so content outside the fence is never touched. A corrupt fence aborts rather than guesses. The decision to build this in-house instead of adopting a memory framework (Mem0, Letta, Zep/Graphiti, LangMem, Cognee, A-MEM, MemOS, basic-memory) is recorded as ADR-0013, backed by a 13-system primary-source survey.
 
 ## Why it exists
 
@@ -133,7 +151,8 @@ SessionIds may contain provider prefixes (`opencode:ses_abc...`). The filesystem
 - Aladeen's own blueprint runs → trace store: complete
 - MCP server bundle: complete (`aladeen-mcp` bin; read-only tools + resources)
 - Observability (ingest + report + fingerprint buckets + read-only replay + MCP): complete
-- Learning layer / actionable replay (`suggest_remedy`, `worktree_collision` known-fix + tiered evidence): landing — read-only suggestions only, no auto-execution. The evidence tier returns `none` for most buckets on small stores (expected). See [Known limits](#known-limits)
+- Learning layer — actionable replay (`suggest_remedy`, `worktree_collision` known-fix + tiered evidence): complete (read-only suggestions only, no auto-execution; evidence tier returns `none` for most buckets on small stores — expected. See [Known limits](#known-limits))
+- Learning module (`aladeen learn` / `lessons`, Tier-0 detectors, FadeMem-style decay, fenced AGENTS.md actuation, semantic Markdown export): complete in v0.2.0. Post-actuation recurrence measurement (the step that turns `actuated → verified`) and Tier-1 LLM reflection over flagged sessions are planned next, behind v0.2.x classifier refinement
 - Hermes ingester: planned (gated on `~/.hermes/state.db` schema inspection)
 - Gemini CLI ingester: planned (gated on confirming actual storage path)
 - jcode ingester: planned (gated on upstream-repo inspection)

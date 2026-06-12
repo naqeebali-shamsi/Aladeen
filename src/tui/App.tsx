@@ -269,7 +269,7 @@ const AdapterView: React.FC = () => {
             <Text bold color="white">{mode === 'broadcast' ? 'BROADCAST' : currentAdapter.name.toUpperCase()}</Text>
          </Box>
          <Box>
-            <Text dimColor>v0.1.0 | Press 'q' to quit</Text>
+            <Text dimColor>v0.2.0 | Press 'q' to quit</Text>
          </Box>
       </Box>
     </Box>
