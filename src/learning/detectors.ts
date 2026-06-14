@@ -252,6 +252,174 @@ export function detectCompletedButThrashed(input: DetectorInput): LessonCandidat
   })];
 }
 
+// --- prompt-quality detectors ----------------------------------------------------
+// These mine the CONTENT of the user's prompts (the scrubbed user_message text), not
+// the agent's behavior. They are OUTCOME-CONDITIONED: a weak-looking ask that completed
+// cleanly is never flagged — a prompt shape is only claimed when it actually co-occurred
+// with a derailed session. That keeps the honesty invariant intact: the statement still
+// describes a recurring SHAPE plus generic guidance, never a per-session diagnosis.
+// Concrete "ask it this way instead" rewrites are deliberately out of scope here — those
+// are a per-session diagnosis and belong to the future Tier-1 reflection pass, which
+// emits a separate PromptCritique artifact, not a Lesson (see vault ADR-0015).
+
+// A session "derailed" if its visible outcome is bad, OR it reported success while
+// thrashing. Mirrors detectCompletedButThrashed's thresholds so the two agree on
+// what "thrash" means.
+function isDerailedSession(input: DetectorInput): boolean {
+  const { trace, digest } = input;
+  const o = trace.outcome;
+  if (o === 'interrupted' || o === 'errored' || o === 'gave_up') return true;
+  if (o !== 'completed') return false;
+  let results = 0;
+  for (const e of trace.events) if (e.kind === 'tool_result') results += 1;
+  if (results < THRASH_MIN_RESULTS) return false;
+  return digest.toolFailureCount / results >= THRASH_FAILURE_RATE;
+}
+
+// Some ingested `user_message` events are not human prompts: agent CLIs encode injected
+// context (environment blocks, local-command caveats, AGENTS.md / CLAUDE.md dumps) and
+// multi-agent runs encode teammate protocol traffic, all with role=user. Prompt detectors
+// must ignore these or they mine "lessons" from machine chatter. (The deeper fix is to tag
+// them at ingest; this guard keeps Tier-0 honest until then — surfaced by the 199-session
+// dogfood, where 5/6 vague-opening fires were injected blocks, not human asks.)
+const INJECTED_PROMPT_RE = /^<(?:local-command|environment_context|system-reminder|command-message|command-name|teammate-message|user-prompt-submit-hook|task|objective|tool_use_error|INSTRUCTIONS)\b/i;
+
+function isHumanPrompt(text: string): boolean {
+  const t = text.trimStart();
+  if (t === '') return false;
+  if (INJECTED_PROMPT_RE.test(t)) return false;
+  if (/^Base directory for this skill:/i.test(t)) return false; // Claude Code skill-prompt injection
+  if (/^#\s+(?:AGENTS|CLAUDE)\.md\b/i.test(t) || t.includes('<INSTRUCTIONS>')) return false;
+  // Pure machine protocol payloads (teammate JSON, tool envelopes).
+  if (t.startsWith('{') && /"(?:type|requestId|tool_use_id|role)"\s*:/.test(t.slice(0, 200))) return false;
+  return true;
+}
+
+function firstHumanPrompt(trace: SessionTrace): { seq: number; text: string } | undefined {
+  for (const e of trace.events) {
+    if (e.kind === 'user_message' && isHumanPrompt(e.text)) return { seq: e.seq, text: e.text };
+  }
+  return undefined;
+}
+
+// A concrete anchor makes an ask specifiable: a filename/path, a code span, or an
+// acceptance criterion. An opening ask with none of these is "vague".
+const FILE_ANCHOR_RE = /\b[\w@.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|json|jsonl|md|mdx|ya?ml|toml|ini|css|scss|html?|sh|bash|zsh|sql|txt|csv|xml|lock)\b|(?:^|[\s(])(?:src|lib|app|tests?|packages|components|pages|api|server|client)\/[\w./-]+/i;
+const ACCEPTANCE_RE = /\b(?:should|shouldn'?t|must|expects?|expected|so that|in order to|verif(?:y|ies|ied)|ensures?|ensured|returns?|pass(?:es|ing|ed)?|fail(?:s|ing|ed)?|acceptance|criteria|definition of done|requirements?)\b/i;
+
+function hasConcreteAnchor(text: string): boolean {
+  return text.includes('`') || FILE_ANCHOR_RE.test(text) || ACCEPTANCE_RE.test(text);
+}
+
+function wordCount(text: string): number {
+  const m = text.trim().match(/\S+/g);
+  return m ? m.length : 0;
+}
+
+// Markers that signal the user is correcting the agent AFTER it acted. Distinct from
+// constraint-setting: "don't touch the tests" is GOOD prompting and is NOT a marker.
+const CORRECTION_RE = /^\s*no[,.\s]|^\s*(?:ok[,.\s]+|well[,.\s]+|wait[,.\s]+)?actually\b|\bnot what\b|\bthat'?s not\b|\bi meant\b|\bi didn'?t mean\b|\brevert\b|\bundo\b|\binstead\b|\bnvm\b|\bnever ?mind\b|\bthat'?s wrong\b|\bwrong\b/i;
+const CORRECTION_MAX_WORDS = 25;
+
+function isCorrectionMessage(text: string): boolean {
+  return wordCount(text) <= CORRECTION_MAX_WORDS && CORRECTION_RE.test(text);
+}
+
+// Previous meaningful event was the agent doing work — so a user message that follows
+// it is a reaction to that work, not a fresh opening ask.
+const AGENT_ACTION_KINDS: ReadonlySet<string> = new Set([
+  'agent_message', 'tool_call', 'tool_result', 'file_change', 'subagent_spawn',
+]);
+
+const MULTI_INTENT_LIST_ITEMS = 3;
+const MULTI_INTENT_CONNECTORS = 2;
+
+function isMultiIntent(text: string): boolean {
+  let listItems = 0;
+  for (const line of text.split('\n')) {
+    if (/^\s*\d+[.)]\s+\S/.test(line) || /^\s*[-*•]\s+\S/.test(line)) listItems += 1;
+  }
+  if (listItems >= MULTI_INTENT_LIST_ITEMS) return true;
+  const connectors = (text.match(/\band also\b|\band then\b|\bplus,|\balso,/gi) ?? []).length;
+  return connectors >= MULTI_INTENT_CONNECTORS;
+}
+
+// --- vague-opening-ask -----------------------------------------------------------
+// The opening ask names no file, no code, and no acceptance criteria, AND the session
+// derailed. The lesson is the correlation, not the prompt's exact wording.
+export function detectVagueOpeningAsk(input: DetectorInput): LessonCandidate[] {
+  const { trace } = input;
+  const opening = firstHumanPrompt(trace);
+  if (!opening) return [];
+  if (!isDerailedSession(input)) return [];
+  if (hasConcreteAnchor(opening.text)) return [];
+  return [makeCandidate(input, {
+    detectorId: 'vague-opening-ask',
+    dims: {},
+    statement:
+      'Opening asks that name no target file, no code, and no acceptance criteria tend to '
+      + 'derail (mid-run interrupts, thrash, or errors). Lead with the specifics: which '
+      + "file(s) to change, what 'done' looks like, and what to leave alone.",
+    category: 'user-prompt',
+    evidence: [{ sessionId: trace.sessionId, seq: opening.seq }],
+  })];
+}
+
+// --- correction-followup ---------------------------------------------------------
+// Terse course-corrections issued AFTER the agent already acted — the user caught the
+// underspecification at runtime. One candidate per session; recurrence is the lesson.
+export function detectCorrectionFollowup(input: DetectorInput): LessonCandidate[] {
+  const { trace } = input;
+  const seqs: number[] = [];
+  let prevAgentAction = false;
+  for (const e of trace.events) {
+    if (e.kind === 'session_start' || e.kind === 'session_end' || e.kind === 'interrupt') {
+      continue; // markers/interrupts don't reset "did the agent just act?"
+    }
+    if (e.kind === 'user_message') {
+      if (!isHumanPrompt(e.text)) continue; // injected context, not a human turn — stay transparent
+      if (prevAgentAction && isCorrectionMessage(e.text) && seqs.length < EVIDENCE_PER_SESSION) {
+        seqs.push(e.seq);
+      }
+    }
+    prevAgentAction = AGENT_ACTION_KINDS.has(e.kind);
+  }
+  if (seqs.length === 0) return [];
+  return [makeCandidate(input, {
+    detectorId: 'correction-followup',
+    dims: {},
+    statement:
+      'Sessions accumulate quick course-corrections after the agent has already acted '
+      + "('no…', 'actually…', 'revert that') — a sign the intent was underspecified when "
+      + 'work began. Pin the constraint in the first ask (desired approach, boundaries, '
+      + 'what to avoid) so the first attempt aims true.',
+    category: 'user-prompt',
+    evidence: seqs.map((seq) => ({ sessionId: trace.sessionId, seq })),
+  })];
+}
+
+// --- multi-intent-ask ------------------------------------------------------------
+// The opening message bundles several distinct asks (long lists, "also… and then…"),
+// AND the session derailed. A clean numbered list that completed fine never fires.
+export function detectMultiIntentAsk(input: DetectorInput): LessonCandidate[] {
+  const { trace } = input;
+  const opening = firstHumanPrompt(trace);
+  if (!opening) return [];
+  if (!isDerailedSession(input)) return [];
+  if (!isMultiIntent(opening.text)) return [];
+  return [makeCandidate(input, {
+    detectorId: 'multi-intent-ask',
+    dims: {},
+    statement:
+      'Opening messages that bundle several asks at once (long numbered lists, '
+      + "'also… and then…') track with scope drift and derailment. Split multi-part work "
+      + 'into separate, sequenced asks, or mark explicit priority, so each piece lands '
+      + 'before the next begins.',
+    category: 'user-prompt',
+    evidence: [{ sessionId: trace.sessionId, seq: opening.seq }],
+  })];
+}
+
 // --- orchestration ---------------------------------------------------------------
 
 export function runDetectors(input: DetectorInput): LessonCandidate[] {
@@ -263,6 +431,9 @@ export function runDetectors(input: DetectorInput): LessonCandidate[] {
     ...detectInterruptMidAction(input),
     ...detectErrorStorm(input, claimedClasses),
     ...detectCompletedButThrashed(input),
+    ...detectVagueOpeningAsk(input),
+    ...detectCorrectionFollowup(input),
+    ...detectMultiIntentAsk(input),
   ];
 }
 

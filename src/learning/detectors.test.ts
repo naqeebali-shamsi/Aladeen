@@ -3,10 +3,13 @@ import type { SessionEvent, SessionTrace, SessionOutcome } from '../observabilit
 import { computeDigest } from '../observability/digest.js';
 import {
   detectCompletedButThrashed,
+  detectCorrectionFollowup,
   detectEditLoop,
   detectErrorStorm,
   detectInterruptMidAction,
+  detectMultiIntentAsk,
   detectRepeatedToolFailure,
+  detectVagueOpeningAsk,
   runDetectors,
 } from './detectors.js';
 
@@ -28,6 +31,19 @@ const agentMsg = () => ev('agent_message', { text: 'working on it' });
 const userMsg = () => ev('user_message', { text: 'please do the thing' });
 const interrupt = (initiator: 'user' | 'system' | 'unknown') => ev('interrupt', { initiator });
 const errorEv = (errorClass: string) => ev('error', { errorClass, message: 'boom', fatal: false });
+const userMsgText = (text: string) => ev('user_message', { text });
+
+// Builds `total` Bash call/result pairs where the first `failures` come back ok=false
+// — enough volume to trip the completed-but-thrashed / derailment thresholds.
+function thrashResults(failures: number, total: number): SessionEvent[] {
+  const events: SessionEvent[] = [];
+  for (let i = 0; i < total; i++) {
+    const id = `t${i}`;
+    events.push(call('Bash', id));
+    events.push(result(id, i >= failures));
+  }
+  return events;
+}
 
 function makeTrace(events: SessionEvent[], outcome: SessionOutcome = 'completed'): SessionTrace {
   return {
@@ -190,6 +206,173 @@ describe('detectCompletedButThrashed', () => {
   });
 });
 
+describe('detectVagueOpeningAsk', () => {
+  it('fires when the opening ask has no anchor and the session derailed', () => {
+    const input = inputFor([userMsgText('fix it'), agentMsg(), interrupt('user')], 'interrupted');
+    const out = detectVagueOpeningAsk(input);
+    expect(out).toHaveLength(1);
+    expect(out[0].candidateKey).toBe('vague-opening-ask');
+    expect(out[0].category).toBe('user-prompt');
+    expect(out[0].evidence).toHaveLength(1);
+    expect(out[0].evidence[0].sessionId).toBe('fixture-session');
+  });
+
+  it('stays quiet when the session completed cleanly', () => {
+    expect(detectVagueOpeningAsk(inputFor([userMsgText('fix it'), agentMsg()], 'completed'))).toHaveLength(0);
+  });
+
+  it('stays quiet when the opening names a file path', () => {
+    const input = inputFor([userMsgText('fix the JWT bug in src/auth.ts'), agentMsg()], 'errored');
+    expect(detectVagueOpeningAsk(input)).toHaveLength(0);
+  });
+
+  it('stays quiet when the opening states acceptance criteria', () => {
+    const input = inputFor(
+      [userMsgText('make login work so that expired tokens are rejected'), agentMsg()],
+      'errored',
+    );
+    expect(detectVagueOpeningAsk(input)).toHaveLength(0);
+  });
+
+  it('treats a backtick code span as a concrete anchor', () => {
+    const input = inputFor([userMsgText('the `parseToken` helper is broken'), agentMsg()], 'gave_up');
+    expect(detectVagueOpeningAsk(input)).toHaveLength(0);
+  });
+
+  it('fires on a completed-but-thrashed session with a vague opener', () => {
+    const out = detectVagueOpeningAsk(inputFor([userMsgText('make it work'), ...thrashResults(5, 12)], 'completed'));
+    expect(out).toHaveLength(1);
+  });
+
+  it('skips an injected opening block and flags the first real human ask', () => {
+    const injected = '<environment_context><cwd>/x</cwd></environment_context>';
+    const input = inputFor(
+      [userMsgText(injected), userMsgText('fix it'), agentMsg(), interrupt('user')],
+      'interrupted',
+    );
+    const out = detectVagueOpeningAsk(input);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence).toHaveLength(1);
+  });
+
+  it('does not fire when every opening message is injected, non-human content', () => {
+    const input = inputFor(
+      [userMsgText('<task>review this 1. a 2. b 3. c</task>'), agentMsg(), interrupt('user')],
+      'interrupted',
+    );
+    expect(detectVagueOpeningAsk(input)).toHaveLength(0);
+  });
+});
+
+describe('detectCorrectionFollowup', () => {
+  it('fires when a terse correction follows an agent action', () => {
+    const input = inputFor(
+      [userMsgText('build the feature'), agentMsg(), userMsgText('no, revert that and keep it simple')],
+      'completed',
+    );
+    const out = detectCorrectionFollowup(input);
+    expect(out).toHaveLength(1);
+    expect(out[0].candidateKey).toBe('correction-followup');
+    expect(out[0].category).toBe('user-prompt');
+    expect(out[0].evidence).toHaveLength(1);
+  });
+
+  it('ignores correction words in the opening message (no prior agent action)', () => {
+    expect(detectCorrectionFollowup(inputFor([userMsgText('actually, start fresh')], 'completed'))).toHaveLength(0);
+  });
+
+  it('does not treat a forward constraint as a correction', () => {
+    const input = inputFor(
+      [userMsgText('add a logout button'), agentMsg(), userMsgText("don't touch the tests")],
+      'completed',
+    );
+    expect(detectCorrectionFollowup(input)).toHaveLength(0);
+  });
+
+  it('ignores a non-correction follow-up', () => {
+    const input = inputFor(
+      [userMsgText('add login'), agentMsg(), userMsgText('now add a logout button too')],
+      'completed',
+    );
+    expect(detectCorrectionFollowup(input)).toHaveLength(0);
+  });
+
+  it('captures multiple corrections as evidence, one candidate per session', () => {
+    const input = inputFor(
+      [
+        userMsgText('do the thing'),
+        agentMsg(), userMsgText('no, not like that'),
+        agentMsg(), userMsgText('revert it'),
+      ],
+      'completed',
+    );
+    const out = detectCorrectionFollowup(input);
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence).toHaveLength(2);
+  });
+
+  it('stays transparent to an injected block between the agent action and the correction', () => {
+    const input = inputFor(
+      [
+        userMsgText('build it'),
+        agentMsg(),
+        userMsgText('<system-reminder>budget note</system-reminder>'),
+        userMsgText('no, revert that'),
+      ],
+      'completed',
+    );
+    expect(detectCorrectionFollowup(input)).toHaveLength(1);
+  });
+
+  it('never treats an injected message as a correction, even with marker words', () => {
+    const input = inputFor(
+      [
+        userMsgText('build it'),
+        agentMsg(),
+        userMsgText('<environment_context>use X instead of Y</environment_context>'),
+      ],
+      'completed',
+    );
+    expect(detectCorrectionFollowup(input)).toHaveLength(0);
+  });
+});
+
+describe('detectMultiIntentAsk', () => {
+  it('fires on a numbered-list opening that derailed', () => {
+    const ask = 'do three things:\n1. add login\n2. add logout\n3. wire the nav';
+    const out = detectMultiIntentAsk(inputFor([userMsgText(ask), agentMsg(), interrupt('user')], 'interrupted'));
+    expect(out).toHaveLength(1);
+    expect(out[0].candidateKey).toBe('multi-intent-ask');
+    expect(out[0].category).toBe('user-prompt');
+  });
+
+  it('fires on connector-bundled asks that derailed', () => {
+    const input = inputFor(
+      [userMsgText('refactor the parser and also add tests and then update the docs'), agentMsg()],
+      'errored',
+    );
+    expect(detectMultiIntentAsk(input)).toHaveLength(1);
+  });
+
+  it('stays quiet when the multi-part ask completed cleanly', () => {
+    const ask = 'three things:\n1. a\n2. b\n3. c';
+    expect(detectMultiIntentAsk(inputFor([userMsgText(ask), agentMsg()], 'completed'))).toHaveLength(0);
+  });
+
+  it('stays quiet on a single-intent ask', () => {
+    const input = inputFor([userMsgText('rename the variable in src/cli.tsx'), agentMsg()], 'errored');
+    expect(detectMultiIntentAsk(input)).toHaveLength(0);
+  });
+
+  it('does not fire on an injected blob that contains a list', () => {
+    const input = inputFor(
+      [userMsgText('<task>do these:\n1. a\n2. b\n3. c</task>'), agentMsg(), interrupt('user')],
+      'interrupted',
+    );
+    expect(detectMultiIntentAsk(input)).toHaveLength(0);
+  });
+});
+
 describe('runDetectors', () => {
   it('returns nothing for a clean session', () => {
     const input = inputFor([
@@ -210,5 +393,20 @@ describe('runDetectors', () => {
     expect(c.agentCli).toBe('claude-code');
     expect(c.patternFingerprint).toBe(input.digest.patternFingerprint);
     expect(c.detectorVersion).toBe('1');
+  });
+
+  it('surfaces prompt-quality candidates alongside behavioral ones', () => {
+    const input = inputFor([userMsgText('fix it'), agentMsg(), interrupt('user')], 'interrupted');
+    const ids = runDetectors(input).map((c) => c.detectorId);
+    expect(ids).toContain('interrupt-mid-action');
+    expect(ids).toContain('vague-opening-ask');
+  });
+
+  it('stays silent on a clean session even with a terse opening ask', () => {
+    const input = inputFor(
+      [userMsgText('fix it'), call('Read', 'c1'), result('c1', true), agentMsg()],
+      'completed',
+    );
+    expect(runDetectors(input)).toHaveLength(0);
   });
 });
