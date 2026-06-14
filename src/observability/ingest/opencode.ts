@@ -9,6 +9,7 @@ import {
 import { Scrubber } from '../scrubber.js';
 import { inferOutcome } from './_shared/outcome.js';
 import { classifyError } from './_shared/classify-error.js';
+import { classifyUserMessageOrigin } from './_shared/classify-origin.js';
 import { msToIso } from './_shared/time.js';
 
 // Ingester for SST opencode. Sessions live in a SQLite DB at
@@ -237,6 +238,7 @@ export class OpencodeIngester {
               timestamp: ts,
               source: srcRef(),
               text: scrubbed.text,
+              origin: classifyUserMessageOrigin(scrubbed.text),
             });
           } else {
             events.push({

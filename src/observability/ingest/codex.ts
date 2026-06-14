@@ -10,6 +10,7 @@ import { Scrubber } from '../scrubber.js';
 import { parseJsonl } from './_shared/jsonl.js';
 import { inferOutcome } from './_shared/outcome.js';
 import { classifyError } from './_shared/classify-error.js';
+import { classifyUserMessageOrigin } from './_shared/classify-origin.js';
 
 // Ingester for OpenAI Codex CLI session transcripts. Codex writes JSONL
 // rollouts to:
@@ -187,6 +188,7 @@ export class CodexIngester {
               timestamp: ts,
               source: srcRef(lineNumber),
               text: scrubbed.text,
+              origin: classifyUserMessageOrigin(scrubbed.text),
             });
           } else if (role === 'assistant') {
             events.push({

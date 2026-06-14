@@ -68,9 +68,26 @@ const EventBaseSchema = z.object({
   source: SourceRefSchema,
 });
 
+// Provenance of a role=user turn. Agent CLIs funnel three very different
+// things through the same role=user slot, and prompt-quality mining must see
+// only the human ones:
+//   - human    a real person's prompt.
+//   - injected harness-inserted context: environment blocks, AGENTS.md/
+//              CLAUDE.md dumps, slash-command expansions, skill/subagent
+//              prompts, image placeholders, turn-abort/interrupt notices.
+//   - protocol inter-agent / tool machine traffic: teammate & subagent
+//              coordination frames, bare JSON dispatch envelopes.
+export const USER_MESSAGE_ORIGINS = ['human', 'injected', 'protocol'] as const;
+export type UserMessageOrigin = (typeof USER_MESSAGE_ORIGINS)[number];
+
 export const UserMessageEventSchema = EventBaseSchema.extend({
   kind: z.literal('user_message'),
   text: z.string(),              // scrubbed
+  // Classified at ingest, where the parser has the most context. OPTIONAL so
+  // traces written before this field existed still parse (schemaVersion stays
+  // '1'); consumers treat an absent origin as "unknown" and fall back to a
+  // shape heuristic. See observability/ingest/_shared/classify-origin.ts.
+  origin: z.enum(USER_MESSAGE_ORIGINS).optional(),
   attachments: z.array(z.object({
     type: z.string(),
     pathHash: z.string().optional(),  // sha256 of original path, never the path

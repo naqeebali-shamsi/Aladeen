@@ -11,6 +11,7 @@ import { Scrubber } from '../scrubber.js';
 import { parseJsonl } from './_shared/jsonl.js';
 import { inferOutcome } from './_shared/outcome.js';
 import { classifyError } from './_shared/classify-error.js';
+import { classifyUserMessageOrigin } from './_shared/classify-origin.js';
 
 // Ingester for OpenClaw agent sessions.
 //
@@ -205,7 +206,9 @@ export class OpenClawIngester {
           timestamp: ts,
           source: srcRef,
           text: scrubbed.text,
-          ...(role === 'assistant' && message.model ? { model: message.model } : {}),
+          ...(role === 'assistant'
+            ? (message.model ? { model: message.model } : {})
+            : { origin: classifyUserMessageOrigin(scrubbed.text) }),
         } as SessionEvent);
         continue;
       }
@@ -224,7 +227,9 @@ export class OpenClawIngester {
             timestamp: ts,
             source: srcRef,
             text: scrubbed.text,
-            ...(role === 'assistant' && message.model ? { model: message.model } : {}),
+            ...(role === 'assistant'
+              ? (message.model ? { model: message.model } : {})
+              : { origin: classifyUserMessageOrigin(scrubbed.text) }),
           } as SessionEvent);
         } else if (block.type === 'tool_use'
                    && typeof block.id === 'string'

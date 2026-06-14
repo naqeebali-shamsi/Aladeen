@@ -32,6 +32,8 @@ const userMsg = () => ev('user_message', { text: 'please do the thing' });
 const interrupt = (initiator: 'user' | 'system' | 'unknown') => ev('interrupt', { initiator });
 const errorEv = (errorClass: string) => ev('error', { errorClass, message: 'boom', fatal: false });
 const userMsgText = (text: string) => ev('user_message', { text });
+const userMsgOrigin = (text: string, origin: 'human' | 'injected' | 'protocol') =>
+  ev('user_message', { text, origin });
 
 // Builds `total` Bash call/result pairs where the first `failures` come back ok=false
 // — enough volume to trip the completed-but-thrashed / derailment thresholds.
@@ -370,6 +372,39 @@ describe('detectMultiIntentAsk', () => {
       'interrupted',
     );
     expect(detectMultiIntentAsk(input)).toHaveLength(0);
+  });
+});
+
+describe('prompt detectors honor the ingest origin tag', () => {
+  // When user_message.origin is present, it is authoritative — the regex shape
+  // heuristic is consulted only as a legacy fallback for untagged traces.
+
+  it('skips a human-looking opening that ingest tagged injected (tag wins over shape)', () => {
+    const input = inputFor([userMsgOrigin('fix it', 'injected'), agentMsg(), interrupt('user')], 'interrupted');
+    expect(detectVagueOpeningAsk(input)).toHaveLength(0);
+  });
+
+  it('mines an injected-looking opening that ingest tagged human (tag wins over shape)', () => {
+    const input = inputFor([userMsgOrigin('<task>fix it</task>', 'human'), agentMsg(), interrupt('user')], 'interrupted');
+    expect(detectVagueOpeningAsk(input)).toHaveLength(1);
+  });
+
+  it('correction-followup ignores a tagged-injected message even with marker words', () => {
+    const input = inputFor(
+      [userMsgText('build it'), agentMsg(), userMsgOrigin('no, revert that', 'injected')],
+      'completed',
+    );
+    expect(detectCorrectionFollowup(input)).toHaveLength(0);
+  });
+
+  it('falls back to shape classification when origin is absent (legacy trace)', () => {
+    const injected = inputFor(
+      [userMsgText('<environment_context>x</environment_context>'), agentMsg(), interrupt('user')],
+      'interrupted',
+    );
+    expect(detectVagueOpeningAsk(injected)).toHaveLength(0); // shape → injected → skipped
+    const human = inputFor([userMsgText('fix it'), agentMsg(), interrupt('user')], 'interrupted');
+    expect(detectVagueOpeningAsk(human)).toHaveLength(1);    // shape → human → mined
   });
 });
 

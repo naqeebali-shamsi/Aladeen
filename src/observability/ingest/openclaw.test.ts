@@ -88,6 +88,24 @@ describe('OpenClawIngester.ingestText', () => {
     }
   });
 
+  it('tags user_message.origin for both string and content-array text turns', () => {
+    const text = jsonl([
+      { role: 'user', content: 'add a logout button to src/nav.tsx', timestamp: '2026-05-20T10:00:00.000Z' },
+      { role: 'user', content: '<environment_context><cwd>/home/test</cwd></environment_context>', timestamp: '2026-05-20T10:00:01.000Z' },
+      { role: 'user', content: [{ type: 'text', text: '<teammate-message teammate_id="lead">ping</teammate-message>' }], timestamp: '2026-05-20T10:00:02.000Z' },
+    ]);
+    const ingester = new OpenClawIngester(new Scrubber({ homeDir: '/home/test' }));
+    const result = ingester.ingestText(text, {
+      sessionId: 'sess-origin',
+      filePath: '/x.jsonl',
+    }, { mtime: new Date('2026-01-01T00:00:00.000Z') });
+
+    const origins = result.trace.events
+      .filter((e) => e.kind === 'user_message')
+      .map((e) => (e.kind === 'user_message' ? e.origin : undefined));
+    expect(origins).toEqual(['human', 'injected', 'protocol']);
+  });
+
   it('handles plain string content (Anthropic alternative shape)', () => {
     const text = jsonl([
       { role: 'user', content: 'hello', timestamp: '2026-05-20T10:00:00.000Z' },
