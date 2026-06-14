@@ -11,6 +11,7 @@ import { Scrubber } from '../scrubber.js';
 import { parseJsonl } from './_shared/jsonl.js';
 import { inferOutcome } from './_shared/outcome.js';
 import { classifyError } from './_shared/classify-error.js';
+import { classifyUserMessageOrigin } from './_shared/classify-origin.js';
 
 // Ingester for Claude Code .jsonl session files. The on-disk layout under
 // ~/.claude/projects/<encoded-cwd>/ is:
@@ -201,6 +202,7 @@ export class ClaudeCodeIngester {
             timestamp: ts,
             source: srcRef,
             text: scrubbed.text,
+            origin: classifyUserMessageOrigin(scrubbed.text),
           });
         } else if (Array.isArray(content)) {
           for (const block of content) {
@@ -212,6 +214,7 @@ export class ClaudeCodeIngester {
                 timestamp: ts,
                 source: srcRef,
                 text: scrubbed.text,
+                origin: classifyUserMessageOrigin(scrubbed.text),
               });
             } else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
               const ok = block.is_error !== true;

@@ -64,6 +64,31 @@ describe('CodexIngester.ingestText', () => {
     expect(result.skippedTypes['message:developer']).toBe(1);
   });
 
+  it('tags user_message.origin: human prompt vs injected context vs protocol', () => {
+    const text = jsonl([
+      { timestamp: '2026-02-19T10:00:01.000Z', type: 'response_item', payload: {
+          type: 'message', role: 'user', content: 'list the repo and explain src/cli.tsx',
+      }},
+      // Codex funnels env/context/abort notices through role=user too.
+      { timestamp: '2026-02-19T10:00:02.000Z', type: 'response_item', payload: {
+          type: 'message', role: 'user', content: [{ type: 'text', text: '<environment_context><cwd>/home/test/repo</cwd></environment_context>' }],
+      }},
+      { timestamp: '2026-02-19T10:00:03.000Z', type: 'response_item', payload: {
+          type: 'message', role: 'user', content: '<turn_aborted>The user interrupted the previous response</turn_aborted>',
+      }},
+      { timestamp: '2026-02-19T10:00:04.000Z', type: 'response_item', payload: {
+          type: 'message', role: 'user', content: '<subagent_notification>child done</subagent_notification>',
+      }},
+    ]);
+    const ingester = new CodexIngester(new Scrubber({ homeDir: '/home/test' }));
+    const result = ingester.ingestText(text, '/tmp/rollout.jsonl', { mtime: new Date('2026-01-01T00:00:00.000Z') });
+
+    const origins = result.trace.events
+      .filter((e) => e.kind === 'user_message')
+      .map((e) => (e.kind === 'user_message' ? e.origin : undefined));
+    expect(origins).toEqual(['human', 'injected', 'injected', 'protocol']);
+  });
+
   it('treats absent "Exit code:" prefix as ok=true (custom tool output convention)', () => {
     const text = jsonl([
       { timestamp: '2026-02-19T10:00:01.000Z', type: 'response_item', payload: {

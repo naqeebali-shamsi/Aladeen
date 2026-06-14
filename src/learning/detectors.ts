@@ -1,8 +1,10 @@
 import type {
   SessionTrace,
+  SessionEvent,
   RunDigest,
   ErrorClass,
 } from '../observability/session-trace.js';
+import { classifyUserMessageOrigin } from '../observability/ingest/_shared/classify-origin.js';
 import type { EvidenceRef, LessonCategory } from './lesson.js';
 
 // Tier-0 deterministic detectors: pure functions over one ingested session
@@ -157,9 +159,9 @@ export function detectInterruptMidAction(input: DetectorInput): LessonCandidate[
     detectorId: 'interrupt-mid-action',
     dims: {},
     statement:
-      'Sessions get interrupted while the agent is mid-action — direction drifted from intent. '
-      + 'Front-load constraints in the ask (target files, acceptance criteria, what NOT to touch) '
-      + 'to cut mid-run corrections.',
+      'Sessions get interrupted mid-action when direction drifts from intent. Before large '
+      + 'or irreversible steps, surface your plan and confirm scope so course-correction '
+      + 'happens before the work, not during it.',
     category: 'user-prompt',
     evidence: seqs.map((seq) => ({ sessionId: trace.sessionId, seq })),
   })];
@@ -276,28 +278,23 @@ function isDerailedSession(input: DetectorInput): boolean {
   return digest.toolFailureCount / results >= THRASH_FAILURE_RATE;
 }
 
-// Some ingested `user_message` events are not human prompts: agent CLIs encode injected
-// context (environment blocks, local-command caveats, AGENTS.md / CLAUDE.md dumps) and
-// multi-agent runs encode teammate protocol traffic, all with role=user. Prompt detectors
-// must ignore these or they mine "lessons" from machine chatter. (The deeper fix is to tag
-// them at ingest; this guard keeps Tier-0 honest until then — surfaced by the 199-session
-// dogfood, where 5/6 vague-opening fires were injected blocks, not human asks.)
-const INJECTED_PROMPT_RE = /^<(?:local-command|environment_context|system-reminder|command-message|command-name|teammate-message|user-prompt-submit-hook|task|objective|tool_use_error|INSTRUCTIONS)\b/i;
+// A `user_message` is role=user in the source artifact, but agent CLIs funnel
+// injected context (environment blocks, AGENTS.md/CLAUDE.md dumps, skill/
+// subagent prompts) and inter-agent protocol traffic through the same slot.
+// Prompt detectors must see only HUMAN turns or they mine "lessons" from
+// machine chatter. Provenance is tagged at ingest now (`user_message.origin`) —
+// the single source of truth. Legacy traces written before the tag existed
+// carry no origin; for those we fall back to the SAME shape classifier the
+// ingesters use, so old and new traces agree by construction.
+type UserMessageEvent = Extract<SessionEvent, { kind: 'user_message' }>;
 
-function isHumanPrompt(text: string): boolean {
-  const t = text.trimStart();
-  if (t === '') return false;
-  if (INJECTED_PROMPT_RE.test(t)) return false;
-  if (/^Base directory for this skill:/i.test(t)) return false; // Claude Code skill-prompt injection
-  if (/^#\s+(?:AGENTS|CLAUDE)\.md\b/i.test(t) || t.includes('<INSTRUCTIONS>')) return false;
-  // Pure machine protocol payloads (teammate JSON, tool envelopes).
-  if (t.startsWith('{') && /"(?:type|requestId|tool_use_id|role)"\s*:/.test(t.slice(0, 200))) return false;
-  return true;
+function isHumanPrompt(e: UserMessageEvent): boolean {
+  return (e.origin ?? classifyUserMessageOrigin(e.text)) === 'human';
 }
 
 function firstHumanPrompt(trace: SessionTrace): { seq: number; text: string } | undefined {
   for (const e of trace.events) {
-    if (e.kind === 'user_message' && isHumanPrompt(e.text)) return { seq: e.seq, text: e.text };
+    if (e.kind === 'user_message' && isHumanPrompt(e)) return { seq: e.seq, text: e.text };
   }
   return undefined;
 }
@@ -357,9 +354,9 @@ export function detectVagueOpeningAsk(input: DetectorInput): LessonCandidate[] {
     detectorId: 'vague-opening-ask',
     dims: {},
     statement:
-      'Opening asks that name no target file, no code, and no acceptance criteria tend to '
-      + 'derail (mid-run interrupts, thrash, or errors). Lead with the specifics: which '
-      + "file(s) to change, what 'done' looks like, and what to leave alone.",
+      'When an opening ask names no target file, no code, and no acceptance criteria, do not '
+      + 'start editing on a guess — restate the goal and ask which file(s) to change and what '
+      + "'done' looks like first. Underspecified openers track with mid-run interrupts and thrash.",
     category: 'user-prompt',
     evidence: [{ sessionId: trace.sessionId, seq: opening.seq }],
   })];
@@ -377,7 +374,7 @@ export function detectCorrectionFollowup(input: DetectorInput): LessonCandidate[
       continue; // markers/interrupts don't reset "did the agent just act?"
     }
     if (e.kind === 'user_message') {
-      if (!isHumanPrompt(e.text)) continue; // injected context, not a human turn — stay transparent
+      if (!isHumanPrompt(e)) continue; // injected context, not a human turn — stay transparent
       if (prevAgentAction && isCorrectionMessage(e.text) && seqs.length < EVIDENCE_PER_SESSION) {
         seqs.push(e.seq);
       }
@@ -389,10 +386,10 @@ export function detectCorrectionFollowup(input: DetectorInput): LessonCandidate[
     detectorId: 'correction-followup',
     dims: {},
     statement:
-      'Sessions accumulate quick course-corrections after the agent has already acted '
-      + "('no…', 'actually…', 'revert that') — a sign the intent was underspecified when "
-      + 'work began. Pin the constraint in the first ask (desired approach, boundaries, '
-      + 'what to avoid) so the first attempt aims true.',
+      "Quick course-corrections ('no…', 'revert that') recurring after the agent has acted "
+      + 'signal that intent was under-clarified before work began. When approach or boundaries '
+      + 'are ambiguous, confirm them with one question before acting — a clarifying check beats '
+      + 'building the wrong thing and reverting.',
     category: 'user-prompt',
     evidence: seqs.map((seq) => ({ sessionId: trace.sessionId, seq })),
   })];
@@ -411,10 +408,9 @@ export function detectMultiIntentAsk(input: DetectorInput): LessonCandidate[] {
     detectorId: 'multi-intent-ask',
     dims: {},
     statement:
-      'Opening messages that bundle several asks at once (long numbered lists, '
-      + "'also… and then…') track with scope drift and derailment. Split multi-part work "
-      + 'into separate, sequenced asks, or mark explicit priority, so each piece lands '
-      + 'before the next begins.',
+      'When an opening message bundles several asks at once (long lists, "also… and then…"), '
+      + 'do not tackle them in parallel — restate them as an ordered checklist, confirm priority, '
+      + 'and finish one before starting the next. Bundled asks track with scope drift.',
     category: 'user-prompt',
     evidence: [{ sessionId: trace.sessionId, seq: opening.seq }],
   })];

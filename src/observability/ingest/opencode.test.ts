@@ -55,6 +55,33 @@ describe('OpencodeIngester.ingestSession', () => {
     expect(result.trace.agentCli.name).toBe('opencode');
   });
 
+  it('tags user_message.origin from the text shape', async () => {
+    const sqlExec = makeSqlExec({
+      message: [
+        { id: 'msg_u1', time_created: 1_700_000_001_000, time_updated: 1_700_000_001_000,
+          data: JSON.stringify({ role: 'user', time: { created: 1_700_000_001_000 } }) },
+        { id: 'msg_u2', time_created: 1_700_000_002_000, time_updated: 1_700_000_002_000,
+          data: JSON.stringify({ role: 'user', time: { created: 1_700_000_002_000 } }) },
+      ],
+      part: [
+        { id: 'p1', message_id: 'msg_u1', time_created: 1_700_000_001_000,
+          data: JSON.stringify({ type: 'text', text: 'refactor the parser in src/parse.ts' }) },
+        { id: 'p2', message_id: 'msg_u2', time_created: 1_700_000_002_000,
+          data: JSON.stringify({ type: 'text', text: '<environment_context><cwd>/home/test/repo</cwd></environment_context>' }) },
+      ],
+    });
+    const ingester = new OpencodeIngester({
+      scrubber: new Scrubber({ homeDir: '/home/test' }),
+      sqlExec,
+    });
+    const result = await ingester.ingestSession('/fake/db', baseSession);
+
+    const origins = result.trace.events
+      .filter((e) => e.kind === 'user_message')
+      .map((e) => (e.kind === 'user_message' ? e.origin : undefined));
+    expect(origins).toEqual(['human', 'injected']);
+  });
+
   it('splits a tool part into tool_call + tool_result, classifies errors, emits file_change on write success', async () => {
     const sqlExec = makeSqlExec({
       message: [

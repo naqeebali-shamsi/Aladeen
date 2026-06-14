@@ -79,6 +79,31 @@ describe('ClaudeCodeIngester.ingestText', () => {
     expect(result.trace.outcome).toBe('completed');
   });
 
+  it('tags user_message.origin: human prompts vs injected context vs protocol', () => {
+    const text = jsonl([
+      { type: 'user', timestamp: '2026-05-19T10:00:00.000Z', message: { role: 'user', content: 'fix the bug in src/foo.ts' } },
+      // Injected env block arrives as role=user string content.
+      { type: 'user', timestamp: '2026-05-19T10:00:01.000Z', message: { role: 'user', content: '<environment_context><cwd>/home/test</cwd></environment_context>' } },
+      // Injected context can also be a text block inside a content array.
+      { type: 'user', timestamp: '2026-05-19T10:00:02.000Z', message: { role: 'user', content: [
+        { type: 'text', text: '# AGENTS.md instructions for /home/test' },
+      ] } },
+      // Multi-agent teammate traffic is protocol, not a human ask.
+      { type: 'user', timestamp: '2026-05-19T10:00:03.000Z', message: { role: 'user', content: '<teammate-message teammate_id="lead">status?</teammate-message>' } },
+    ]);
+
+    const ingester = new ClaudeCodeIngester(new Scrubber({ homeDir: '/home/test' }));
+    const result = ingester.ingestText(text, {
+      sessionId: 'sess-origin',
+      filePath: '/tmp/x/sess-origin.jsonl',
+    }, { mtime: new Date('2026-01-01T00:00:00.000Z') });
+
+    const origins = result.trace.events
+      .filter((e) => e.kind === 'user_message')
+      .map((e) => (e.kind === 'user_message' ? e.origin : undefined));
+    expect(origins).toEqual(['human', 'injected', 'injected', 'protocol']);
+  });
+
   it('marks tool_result as not ok and classifies the error', () => {
     const text = jsonl([
       { type: 'assistant', timestamp: '2026-05-19T10:00:02.000Z', message: {
