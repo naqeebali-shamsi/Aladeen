@@ -3,6 +3,7 @@ import {
   STATUS_GLYPH, ERR_GLYPH, CLI_PIC, cliColor,
 } from './lib.js';
 import { renderRemedyCard } from './remedy-card.js';
+import { renderLoopsCard } from './loops-card.js';
 
 // ── State ────────────────────────────────────────────────────────────────
 const state = {
@@ -131,7 +132,7 @@ function headerHTML() {
       <button class="toggle help-btn" id="help">? HELP</button>
       <button class="rescan" id="rescan">⟳ RE-SCAN</button>
       <div class="channels">
-        ${tab('bridge', '01 Bridge')}${tab('patterns', '02 Patterns')}${tab('trace', '03 Trace')}
+        ${tab('bridge', '01 Bridge')}${tab('patterns', '02 Patterns')}${tab('trace', '03 Trace')}${tab('loops', '04 Loops')}
       </div>
     </div>
   </header>
@@ -157,6 +158,7 @@ function footerHTML() {
 function channelHTML() {
   if (state.channel === 'patterns') return patternsHTML();
   if (state.channel === 'trace') return traceHTML();
+  if (state.channel === 'loops') return loopsHTML();
   return bridgeHTML();
 }
 
@@ -415,6 +417,27 @@ async function mountTrace() {
   document.getElementById('raw-json')?.addEventListener('click', () => openRawModal(trace, scrub));
 }
 
+// ── 04 LOOPS ─────────────────────────────────────────────────────────────
+function loopsHTML() {
+  return panel('LOOP CANDIDATES · recurring work → /loop · /schedule · loop.md',
+    `<div id="loops-mount"><div class="line meta">&gt; scanning your history for recurring work…</div></div>`);
+}
+
+async function mountLoops() {
+  const mount = document.getElementById('loops-mount');
+  if (!mount) return;
+  let report;
+  try {
+    const res = await fetch('/api/loops');
+    if (!res.ok) throw new Error(`loops ${res.status}`);
+    report = await res.json();
+  } catch (e) {
+    mount.innerHTML = `<div class="line fail">loops error: ${esc(String(e))}</div>`;
+    return;
+  }
+  mount.innerHTML = renderLoopsCard(report);
+}
+
 // ── Modal (one reusable dialog: raw-JSON, replay, help) ───────────────────
 function openModal(title, bodyHTML, subtitle) {
   closeModal();
@@ -525,7 +548,11 @@ function wire(app) {
     render();
   });
   app.querySelectorAll('[data-chan]').forEach((b) =>
-    b.addEventListener('click', () => { state.channel = b.dataset.chan; render(); if (state.channel === 'trace') mountTrace(); }));
+    b.addEventListener('click', () => {
+      state.channel = b.dataset.chan; render();
+      if (state.channel === 'trace') mountTrace();
+      if (state.channel === 'loops') mountLoops();
+    }));
 
   // channel-scoped wiring
   app.querySelectorAll('.fprow').forEach((row) => {
@@ -587,6 +614,7 @@ const PANEL_HINTS = {
   'ACTIVE TIME': 'How long real work took (idle gaps excluded — not wall-clock).',
   'FILE HOTSPOTS': 'Files touched most across sessions, by basename. File telemetry is sparse.',
   'LOOP DETECTOR': 'Tool pairs called in near-lockstep — a deterministic retry loop.',
+  'LOOP CANDIDATES': 'Recurring work that could become a Claude /loop, /schedule routine, or .claude/loop.md check. Read-only suggestions.',
   OUTCOMES: 'One dot per session. Click a non-green dot to open its trace.',
   'FINGERPRINT POWER-LAW': 'Every failure shape ranked by frequency. Click a row to query it.',
   INTERFACE: 'Ask the recorder about a pattern: what was asked, what failed, the known-good fix.',

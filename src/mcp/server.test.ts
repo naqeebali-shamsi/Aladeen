@@ -44,6 +44,23 @@ function trace(sessionId: string): SessionTrace {
   };
 }
 
+// Origin-tagged human ask + timestamp, for the loop-candidate tool.
+function loopTrace(sessionId: string, ask: string, startedAt: string): SessionTrace {
+  return {
+    schemaVersion: '1',
+    sessionId,
+    agentCli: { name: 'claude-code' },
+    workspace: { cwdScrubbed: '~/x' },
+    startedAt,
+    endedAt: startedAt,
+    outcome: 'completed',
+    events: [
+      { kind: 'user_message', seq: 0, source: { kind: 'claude-code-jsonl', file: 'x' }, text: ask, origin: 'human' },
+    ],
+    scrubbing: { passes: [] },
+  };
+}
+
 // The MCP SDK exposes private request-handler internals we'd otherwise
 // need to drive through the transport. Easier: type the server as unknown
 // and call the registered tool/resource handlers via the documented
@@ -351,6 +368,46 @@ describe('MCP server', () => {
       const captured = await captureRegistrations(storage, lessonStore);
       const r = await captured.tools.get('query_lessons')!.handler({ limit: 1 });
       expect((r.structuredContent.lessons as unknown[]).length).toBeLessThanOrEqual(1);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('suggest_loops surfaces a recurring ask as a candidate with a suggested command', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      const ids = ['lp1', 'lp2', 'lp3'];
+      for (let i = 0; i < ids.length; i++) {
+        await storage.writeDigest(digest({
+          sessionId: ids[i], outcome: 'completed', toolUsage: { Read: 2 },
+          filesChanged: [], toolFailureCount: 0,
+        }));
+        await storage.writeTrace(loopTrace(ids[i], 'review the open pull requests', `2026-05-0${i + 1}T00:00:00.000Z`));
+      }
+      const captured = await captureRegistrations(storage);
+      const tool = captured.tools.get('suggest_loops');
+      expect(tool).toBeDefined();
+
+      const r = await tool!.handler({});
+      expect(r.content[0].text).toContain('Loop candidates');
+      expect(r.structuredContent.candidateCount).toBe(1);
+      const cands = r.structuredContent.candidates as Array<Record<string, unknown>>;
+      expect(cands[0].sessionCount).toBe(3);
+      expect(String(cands[0].command)).toContain('review the open pull requests');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('suggest_loops is described as suggesting, never creating or running loops', async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'aladeen-mcp-'));
+    try {
+      const storage = new IngestStorage(tmp);
+      const captured = await captureRegistrations(storage);
+      const cfg = captured.tools.get('suggest_loops')!.config as { description: string };
+      expect(cfg.description.toLowerCase()).toContain('suggests');
+      expect(cfg.description.toLowerCase()).toContain('never creates or runs');
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
