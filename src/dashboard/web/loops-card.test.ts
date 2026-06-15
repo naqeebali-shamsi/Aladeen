@@ -8,6 +8,7 @@ import { renderLoopsCard, MECH_LABEL } from './loops-card.js';
 function candidate(over = {}) {
   return {
     label: 'review the open pull requests',
+    source: 'ask-cluster',
     class: 'recurring',
     mechanism: 'loop-interval',
     command: '/loop 2h review the open pull requests',
@@ -49,6 +50,7 @@ describe('renderLoopsCard', () => {
     expect(html).toContain('LOOP CANDIDATES · 1 found');
     expect(html).toContain('review the open pull requests');
     expect(html).toContain('/loop · interval');
+    expect(html).toContain('[ask]');
     expect(html).toContain('/loop 2h review the open pull requests');
     expect(html).toContain('5×');
     expect(html).toContain('codex, claude-code');

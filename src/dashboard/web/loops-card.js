@@ -19,6 +19,10 @@ export const MECH_LABEL = {
   'loop-md': '.claude/loop.md',
 };
 
+// 'ask-cluster' = near-identical repeated ask (precise); 'intent' = same KIND of
+// task across days (coarse). Short tags for the badge line.
+const SRC_TAG = { 'ask-cluster': 'ask', intent: 'intent' };
+
 export function renderLoopsCard(report) {
   const cands = report.candidates || [];
   const lines = [];
@@ -38,6 +42,7 @@ export function renderLoopsCard(report) {
       : 'no clock';
     const mech = MECH_LABEL[c.mechanism] || c.mechanism;
     lines.push(`<div class="line"><span class="loop-badge mech-${esc(c.mechanism)}">${esc(mech)}</span>`
+      + ` <span class="loop-src">[${esc(SRC_TAG[c.source] || c.source || 'ask')}]</span>`
       + ` <span class="ask">${esc(c.label)}</span></div>`);
     lines.push(`<div class="line meta">${c.sessionCount}× · ${esc((c.providers || []).join(', '))} · ${cad} · `
       + `<span class="safety-${esc(c.safety)}">${esc(c.safety)}</span></div>`);

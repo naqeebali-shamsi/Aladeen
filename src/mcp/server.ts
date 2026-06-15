@@ -257,9 +257,11 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
           sessionsScanned: result.sessionsScanned,
           humanAsksFound: result.humanAsksFound,
           noiseFiltered: result.noiseFiltered,
+          fanoutFiltered: result.fanoutFiltered,
           candidateCount: result.candidates.length,
           candidates: result.candidates.map((c) => ({
             label: c.label,
+            source: c.source,
             class: c.class,
             mechanism: c.mechanism,
             command: c.command,

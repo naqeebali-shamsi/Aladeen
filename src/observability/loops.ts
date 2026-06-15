@@ -38,8 +38,14 @@ export interface IterateSignals {
   thrashSessions: number;
 }
 
+// Where a candidate came from: an exact-ask cluster (near-identical phrasing,
+// precise → /loop) or a coarse intent group (same KIND of task phrased
+// differently across days, recurring → /schedule).
+export type LoopSource = 'ask-cluster' | 'intent';
+
 export interface LoopCandidate {
-  label: string;            // top salient tokens of the cluster
+  label: string;            // the cluster's core ask, or the intent's name
+  source: LoopSource;
   class: LoopClass;
   mechanism: LoopMechanism;
   command: string;          // concrete suggestion derived from the user's own asks
@@ -58,6 +64,7 @@ export interface LoopReport {
   sessionsScanned: number;
   humanAsksFound: number;
   noiseFiltered: number;    // Aladeen's own test/harness fixtures dropped
+  fanoutFiltered: number;   // concurrent ask-clusters excluded as parallel fan-out
   guardrail: string;
   coverageNote: string;
   markdown: string;
@@ -79,6 +86,28 @@ const PERIODIC_MAX_HOURS = 24 * 10;
 const PERIODIC_CV_MAX = 0.6;        // gap coefficient-of-variation for "regular"
 const THRASH_MIN_RESULTS = 10;
 const THRASH_RATE = 0.3;
+// Fan-out discrimination: a cluster whose sessions ran concurrently (overlapping
+// wall-clock spans) or were spawned near-simultaneously is parallel fan-out
+// (e.g. /batch or subagents), already concurrent — NOT a sequential loop.
+const NEAR_SIMULTANEOUS_MS = 60_000;       // median start gap below → programmatic spawn
+const OVERLAP_FANOUT_RATIO = 0.5;          // ≥ this fraction of consecutive pairs overlap → fan-out
+// Intent pass (recall): coarse grouping catches the same KIND of task phrased
+// differently across days — the periodic /schedule signal token-clustering misses.
+const MIN_INTENT_SESSIONS = 5;
+const INTENT_MIN_SPAN_DAYS = 2;
+
+// Coarse intent taxonomy. Each session's first ask may match several; a session
+// joins every matching group. `poll` intents watch external state (→ interval).
+const INTENTS: ReadonlyArray<{ key: string; label: string; re: RegExp; poll?: boolean }> = [
+  { key: 'pr-review', label: 'review open pull requests', re: /\b(pull requests?|prs?|code review|review the (pr|changes)|babysit)\b/i },
+  { key: 'tests', label: 'run the test suite', re: /\b(tests?|vitest|jest|specs?|test suite|coverage)\b/i },
+  { key: 'lint', label: 'lint & typecheck', re: /\b(lint|linter|eslint|typecheck|tsc|type ?errors?)\b/i },
+  { key: 'deploy-ci', label: 'check the deploy / CI', re: /\b(deploy(ed|ment)?|\bci\b|pipeline|build status)\b/i, poll: true },
+  { key: 'docs', label: 'update docs / changelog', re: /\b(docs?|readme|changelog|documentation|\badr\b)\b/i },
+  { key: 'plan-review', label: 'review the planning docs', re: /\b(plan\.md|\.planning|phase \d|roadmap|plan files?)\b/i },
+  { key: 'triage', label: 'triage issues', re: /\b(issues?|backlog|triage|bug reports?)\b/i },
+  { key: 'deps', label: 'audit dependencies', re: /\b(dependenc(y|ies)|packages?|npm audit|vulnerabilit|upgrade deps?)\b/i },
+];
 
 // Tools that cannot mutate the workspace. A session is read-only iff every tool
 // it used is in this set (or it used none). Conservative: anything else —
@@ -128,7 +157,9 @@ interface SessionFacts {
   provider: string;
   ask: string;
   tokens: Set<string>;
+  intents: string[];
   startedMs: number | null;
+  endedMs: number | null;
   mutating: boolean;
   editLoop: boolean;
   thrash: boolean;
@@ -183,6 +214,19 @@ function hasContinuation(t: SessionTrace): boolean {
   return false;
 }
 
+// Match intent against the ask's HEADLINE (first line, capped) — the task's
+// subject lives up front, so an incidental keyword buried in a long ask doesn't
+// trigger a false match. And an ask whose headline hits more than a couple of
+// intents is generic boilerplate ("thoroughly explore the codebase…"), not a
+// single recurring task — contribute it to none.
+const MAX_INTENTS_PER_ASK = 2;
+const HEADLINE_CHARS = 80;
+function intentsOf(ask: string): string[] {
+  const headline = ask.split('\n', 1)[0].slice(0, HEADLINE_CHARS);
+  const hits = INTENTS.filter((i) => i.re.test(headline)).map((i) => i.key);
+  return hits.length > MAX_INTENTS_PER_ASK ? [] : hits;
+}
+
 function isReadOnly(d: RunDigest): boolean {
   const tools = Object.keys(d.toolUsage);
   if (d.filesChanged.length > 0) return false;
@@ -211,6 +255,25 @@ function cadenceOf(ms: number[]): LoopCadence {
   else if (cv <= PERIODIC_CV_MAX && medianGapHours >= PERIODIC_MIN_HOURS && medianGapHours <= PERIODIC_MAX_HOURS) shape = 'periodic';
   else shape = 'irregular';
   return { spanDays, medianGapHours, shape };
+}
+
+// Distinguish sequential repetition from parallel fan-out. A human re-running a
+// task makes sessions that DON'T overlap in time; an agent harness (/batch,
+// subagents, GSD) spawns them concurrently. Near-simultaneous starts or
+// overlapping [start,end] spans ⇒ fan-out (already parallel, not a loop).
+function concurrencyOf(members: SessionFacts[]): 'sequential' | 'fan-out' {
+  const timed = members.filter((m) => m.startedMs != null);
+  if (timed.length < 2) return 'sequential';
+  const sorted = [...timed].sort((a, b) => (a.startedMs as number) - (b.startedMs as number));
+  const gaps = sorted.slice(1).map((m, i) => (m.startedMs as number) - (sorted[i].startedMs as number));
+  const medGap = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)];
+  if (medGap < NEAR_SIMULTANEOUS_MS) return 'fan-out';
+  let overlaps = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const prevEnd = sorted[i - 1].endedMs ?? (sorted[i - 1].startedMs as number);
+    if ((sorted[i].startedMs as number) < prevEnd) overlaps += 1;
+  }
+  return overlaps / (sorted.length - 1) >= OVERLAP_FANOUT_RATIO ? 'fan-out' : 'sequential';
 }
 
 function humanInterval(hours: number): string {
@@ -309,6 +372,33 @@ function rationaleFor(
   return base;
 }
 
+function intentRationale(label: string, n: number, cadence: LoopCadence, safety: LoopSafety): string {
+  const gap = cadence.medianGapHours != null ? `~${humanInterval(cadence.medianGapHours)}` : 'no clock';
+  let base = `${n} sessions over ${cadence.spanDays.toFixed(0)}d touch this kind of work `
+    + `(median gap ${gap}, ${cadence.shape}), phrased differently each time — a recurring routine, not a one-off.`;
+  if (safety === 'mutating') base += ' Mutating — gate it behind a clear check before scheduling.';
+  return base;
+}
+
+// Shared aggregations over a member set (used by both the ask-cluster and the
+// intent pass).
+function startsOf(members: SessionFacts[]): number[] {
+  return members.map((m) => m.startedMs).filter((x): x is number => x != null);
+}
+function providersOf(members: SessionFacts[]): string[] {
+  return [...new Set(members.map((m) => m.provider))].sort();
+}
+function safetyOf(members: SessionFacts[]): LoopSafety {
+  return members.some((m) => m.mutating) ? 'mutating' : 'read-only';
+}
+function iterateSignals(members: SessionFacts[]): IterateSignals {
+  return {
+    editLoopSessions: members.filter((m) => m.editLoop).length,
+    continuationSessions: members.filter((m) => m.continuation).length,
+    thrashSessions: members.filter((m) => m.thrash).length,
+  };
+}
+
 export async function suggestLoops(
   storage: IngestStorage,
   opts: SuggestLoopsOptions = {},
@@ -333,13 +423,14 @@ export async function suggestLoops(
     if (CONTINUATION_RE.test(ask) && wordCount(ask) <= 4) { noiseFiltered += 1; continue; }
     const tokens = tokenize(ask);
     if (tokens.size === 0) continue;
-    const startedMs = parseMs(trace.startedAt ?? trace.endedAt);
     facts.push({
       sessionId: d.sessionId,
       provider: d.agentCliName,
       ask,
       tokens,
-      startedMs,
+      intents: intentsOf(ask),
+      startedMs: parseMs(trace.startedAt ?? trace.endedAt),
+      endedMs: parseMs(trace.endedAt ?? trace.startedAt),
       mutating: !isReadOnly(d),
       editLoop: d.editLoops.length > 0,
       thrash: isThrash(d),
@@ -351,27 +442,29 @@ export async function suggestLoops(
   const humanAsksFound = facts.length;
 
   const candidates: LoopCandidate[] = [];
+  let fanoutFiltered = 0;
+
+  // Pass 1 — exact-ask clusters (near-identical phrasing) → /loop family.
   for (const c of clusters) {
     if (c.members.length < minSessions) continue;
-    const cadence = cadenceOf(c.members.map((m) => m.startedMs).filter((x): x is number => x != null));
-    const iterate: IterateSignals = {
-      editLoopSessions: c.members.filter((m) => m.editLoop).length,
-      continuationSessions: c.members.filter((m) => m.continuation).length,
-      thrashSessions: c.members.filter((m) => m.thrash).length,
-    };
-    const safety: LoopSafety = c.members.some((m) => m.mutating) ? 'mutating' : 'read-only';
+    // A concurrent cluster is parallel fan-out (already running in parallel, e.g.
+    // /batch or subagents), not a sequential loop to automate. Exclude; count it.
+    if (concurrencyOf(c.members) === 'fan-out') { fanoutFiltered += 1; continue; }
+    const cadence = cadenceOf(startsOf(c.members));
+    const iterate = iterateSignals(c.members);
+    const safety = safetyOf(c.members);
     const cls = classifyCluster(c, cadence, iterate);
     const exemplars = dedupeExemplars(c.members, maxSamples, maxExcerpt);
     const mechanism = chooseMechanism(cls, labelOf(c), exemplars, cadence);
-    const core = coreAsk(c.members, maxExcerpt);
     candidates.push({
       label: labelOf(c),
+      source: 'ask-cluster',
       class: cls,
       mechanism,
-      command: buildCommand(mechanism, core, cadence),
+      command: buildCommand(mechanism, coreAsk(c.members, maxExcerpt), cadence),
       rationale: rationaleFor(mechanism, c.members.length, cadence, safety, iterate),
       sessionCount: c.members.length,
-      providers: [...new Set(c.members.map((m) => m.provider))].sort(),
+      providers: providersOf(c.members),
       safety,
       cadence,
       iterate,
@@ -380,9 +473,42 @@ export async function suggestLoops(
     });
   }
 
-  // Rank: most-recurring first, then read-only (safer to loop), then label.
+  // Pass 2 — coarse intent groups (the same KIND of task across days) → /schedule.
+  // Complements pass 1: catches periodic recurrence that diverse phrasing hides.
+  for (const intent of INTENTS) {
+    const members = facts.filter((f) => f.intents.includes(intent.key));
+    if (members.length < MIN_INTENT_SESSIONS) continue;
+    const cadence = cadenceOf(startsOf(members));
+    if (cadence.spanDays < INTENT_MIN_SPAN_DAYS) continue;  // must recur over time
+    if (cadence.shape === 'burst') continue;                // bursts are pass 1's job
+    const safety = safetyOf(members);
+    const mechanism: LoopMechanism = intent.poll ? 'loop-interval' : 'schedule';
+    const command = mechanism === 'loop-interval'
+      ? `/loop ${cadence.medianGapHours != null ? humanInterval(cadence.medianGapHours) : '1h'} ${intent.label}`
+      : `/schedule ${intent.label} (${cadence.medianGapHours != null ? cadenceWord(cadence.medianGapHours) : 'weekly'})`;
+    candidates.push({
+      label: `${intent.label} — recurring`,
+      source: 'intent',
+      class: 'recurring',
+      mechanism,
+      command,
+      rationale: intentRationale(intent.label, members.length, cadence, safety),
+      sessionCount: members.length,
+      providers: providersOf(members),
+      safety,
+      cadence,
+      iterate: iterateSignals(members),
+      sessionIds: members.slice(0, maxSamples).map((m) => m.sessionId),
+      exemplars: dedupeExemplars(members, maxSamples, maxExcerpt),
+    });
+  }
+
+  // Rank: specific ask-clusters before coarse intents, then most-recurring,
+  // then read-only (safer to loop), then label.
+  const sourceRank = (s: LoopSource) => (s === 'ask-cluster' ? 0 : 1);
   candidates.sort((a, b) =>
-    b.sessionCount - a.sessionCount
+    sourceRank(a.source) - sourceRank(b.source)
+    || b.sessionCount - a.sessionCount
     || Number(a.safety === 'mutating') - Number(b.safety === 'mutating')
     || a.label.localeCompare(b.label));
 
@@ -392,20 +518,20 @@ export async function suggestLoops(
     + 'needs a completion check before you let it loop.';
   const coverageNote =
     `Inferred from the first HUMAN ask of ${humanAsksFound}/${ordered.length} sessions `
-    + `(origin-tagged; ${noiseFiltered} Aladeen test/harness fixtures filtered). Clustering groups `
-    + 'near-identical asks, so a tight "burst" cadence may be parallel/retry fan-out rather than '
-    + 'sequential repetition, and a periodic task phrased differently each time is under-counted. '
-    + "File telemetry is partial — codex sessions don't emit file_change — so 'read-only' is "
-    + 'best-effort. Nothing leaves your machine; nothing is executed.';
+    + `(origin-tagged; ${noiseFiltered} Aladeen fixtures + ${fanoutFiltered} parallel-fan-out burst(s) filtered). `
+    + 'Two passes: exact-ask clusters (precise → /loop) and coarse intent groups (periodic → /schedule). '
+    + "File telemetry is partial — codex sessions don't emit file_change — so 'read-only' is best-effort. "
+    + 'Nothing leaves your machine; nothing is executed.';
 
   return {
     candidates,
     sessionsScanned: ordered.length,
     humanAsksFound,
     noiseFiltered,
+    fanoutFiltered,
     guardrail,
     coverageNote,
-    markdown: buildMarkdown(candidates, ordered.length, humanAsksFound, noiseFiltered, guardrail, coverageNote, minSessions),
+    markdown: buildMarkdown(candidates, ordered.length, humanAsksFound, noiseFiltered, fanoutFiltered, guardrail, coverageNote, minSessions),
   };
 }
 
@@ -457,26 +583,29 @@ const MECH_LABEL: Record<LoopMechanism, string> = {
   'loop-md': '.claude/loop.md',
 };
 
+const SOURCE_TAG: Record<LoopSource, string> = { 'ask-cluster': 'ask', intent: 'intent' };
+
 function buildMarkdown(
-  candidates: LoopCandidate[], scanned: number, humanAsks: number, noise: number,
+  candidates: LoopCandidate[], scanned: number, humanAsks: number, noise: number, fanout: number,
   guardrail: string, coverageNote: string, minSessions: number,
 ): string {
+  const filtered = `${noise} fixtures, ${fanout} fan-out`;
   const L: string[] = [];
   L.push('# Loop candidates', '');
   L.push(`> ${guardrail}`, '');
   if (candidates.length === 0) {
     L.push(`No recurring workflow reached the ${minSessions}-session floor across ${humanAsks} human asks `
-      + `(${scanned} sessions scanned, ${noise} fixtures filtered).`, '');
+      + `(${scanned} sessions scanned; ${filtered} filtered).`, '');
     L.push(`_${coverageNote}_`);
     return L.join('\n');
   }
   L.push(`Found **${candidates.length}** loop candidate(s) across ${humanAsks} human asks `
-    + `(${scanned} sessions, ${noise} fixtures filtered):`, '');
+    + `(${scanned} sessions; ${filtered} filtered):`, '');
   candidates.forEach((c, i) => {
     const cad = c.cadence.medianGapHours != null
       ? `span ${c.cadence.spanDays.toFixed(0)}d, median gap ${humanInterval(c.cadence.medianGapHours)} (${c.cadence.shape})`
       : 'single-occurrence timing (no clock)';
-    L.push(`## ${i + 1}. ${c.label}  ·  ${c.class} → ${MECH_LABEL[c.mechanism]}`);
+    L.push(`## ${i + 1}. ${c.label}  ·  [${SOURCE_TAG[c.source]}] ${c.class} → ${MECH_LABEL[c.mechanism]}`);
     L.push(`- **recurrence:** ${c.sessionCount} sessions · providers: ${c.providers.join(', ')}`);
     L.push(`- **cadence:** ${cad}`);
     L.push(`- **safety:** ${c.safety}`);

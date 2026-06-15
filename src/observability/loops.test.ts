@@ -26,7 +26,7 @@ function dig(p: Partial<RunDigest> = {}): RunDigest {
 
 function trc(
   sessionId: string,
-  opts: { ask: string; provider?: string; startedAt?: string; extraHuman?: string[] },
+  opts: { ask: string; provider?: string; startedAt?: string; endedAt?: string; extraHuman?: string[] },
 ): SessionTrace {
   const src = { kind: 'claude-code-jsonl', file: 'x' } as const;
   const events: unknown[] = [];
@@ -37,7 +37,7 @@ function trc(
   }
   return {
     schemaVersion: '1', sessionId, agentCli: { name: opts.provider ?? 'claude-code' },
-    workspace: { cwdScrubbed: '~/x' }, startedAt: opts.startedAt, endedAt: opts.startedAt,
+    workspace: { cwdScrubbed: '~/x' }, startedAt: opts.startedAt, endedAt: opts.endedAt ?? opts.startedAt,
     outcome: 'completed', events, scrubbing: { passes: [] },
   } as unknown as SessionTrace;
 }
@@ -50,6 +50,9 @@ const DAY = 86_400_000;
 interface Group {
   prefix: string; ask: string; n: number; stepMs: number;
   provider?: string; digest?: Partial<RunDigest>; extraHuman?: string[]; startMs?: number;
+  // Per-session duration; lets a group's sessions overlap in wall-clock time
+  // (the fan-out signal). Default 0 → endedAt == startedAt.
+  durationMs?: number;
 }
 function build(groups: Group[]): IngestStorage {
   const digests: RunDigest[] = [];
@@ -57,10 +60,12 @@ function build(groups: Group[]): IngestStorage {
   for (const g of groups) {
     for (let i = 0; i < g.n; i++) {
       const id = `${g.prefix}-${i}`;
+      const start = (g.startMs ?? T0) + i * g.stepMs;
       digests.push(dig({ sessionId: id, agentCliName: g.provider ?? 'claude-code', ...g.digest }));
       traces[id] = trc(id, {
         ask: g.ask, provider: g.provider,
-        startedAt: new Date((g.startMs ?? T0) + i * g.stepMs).toISOString(),
+        startedAt: new Date(start).toISOString(),
+        endedAt: new Date(start + (g.durationMs ?? 0)).toISOString(),
         extraHuman: g.extraHuman,
       });
     }
@@ -95,9 +100,9 @@ describe('suggestLoops — clustering & recurrence', () => {
 
   it('clusters fuzzily on token overlap (varied phrasings of the same task)', async () => {
     const storage = build([
-      { prefix: 'a', ask: 'fix the lint errors', n: 1, stepMs: HOUR },
-      { prefix: 'b', ask: 'fix lint errors please', n: 1, stepMs: HOUR },
-      { prefix: 'c', ask: 'fix the lint errors now', n: 1, stepMs: HOUR },
+      { prefix: 'a', ask: 'fix the lint errors', n: 1, stepMs: HOUR, startMs: T0 },
+      { prefix: 'b', ask: 'fix lint errors please', n: 1, stepMs: HOUR, startMs: T0 + DAY },
+      { prefix: 'c', ask: 'fix the lint errors now', n: 1, stepMs: HOUR, startMs: T0 + 2 * DAY },
     ]);
     const r = await suggestLoops(storage, { minSessions: 3 });
     expect(r.candidates).toHaveLength(1);
@@ -200,6 +205,57 @@ describe('suggestLoops — safety & noise', () => {
     const r = await suggestLoops(storage);
     expect(r.candidates[0].sessionCount).toBe(5);
     expect(r.candidates[0].providers).toEqual(['codex']);
+  });
+});
+
+describe('suggestLoops — iteration 2: fan-out & intent passes', () => {
+  it('excludes a near-simultaneous burst as parallel fan-out (not a loop)', async () => {
+    const storage = build([{ prefix: 'fan', ask: 'review the phase plan critically', n: 4, stepMs: 5_000 }]);
+    const r = await suggestLoops(storage);
+    expect(r.candidates).toHaveLength(0);
+    expect(r.fanoutFiltered).toBe(1);
+  });
+
+  it('treats overlapping wall-clock spans as fan-out even when starts are minutes apart', async () => {
+    const storage = build([{ prefix: 'ov', ask: 'restructure the onboarding module', n: 3, stepMs: 5 * MIN, durationMs: 20 * MIN }]);
+    const r = await suggestLoops(storage);
+    expect(r.candidates).toHaveLength(0);
+    expect(r.fanoutFiltered).toBe(1);
+  });
+
+  it('keeps a sequential burst (non-overlapping rapid re-runs) as a candidate', async () => {
+    const storage = build([{ prefix: 'seq', ask: 'the linter failed, fix it', n: 3, stepMs: 6 * MIN, durationMs: 60_000 }]);
+    const r = await suggestLoops(storage);
+    expect(r.fanoutFiltered).toBe(0);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].source).toBe('ask-cluster');
+  });
+
+  it('intent pass surfaces a periodic /schedule candidate from differently-phrased asks', async () => {
+    const storage = build([
+      { prefix: 't0', ask: 'run the unit tests', n: 1, stepMs: DAY, startMs: T0 },
+      { prefix: 't1', ask: 'execute the test suite please', n: 1, stepMs: DAY, startMs: T0 + 1 * DAY },
+      { prefix: 't2', ask: 'check that vitest passes', n: 1, stepMs: DAY, startMs: T0 + 2 * DAY },
+      { prefix: 't3', ask: 'make sure all specs are green', n: 1, stepMs: DAY, startMs: T0 + 3 * DAY },
+      { prefix: 't4', ask: 'verify the coverage report', n: 1, stepMs: DAY, startMs: T0 + 4 * DAY },
+    ]);
+    const r = await suggestLoops(storage);
+    const intent = r.candidates.find((c) => c.source === 'intent');
+    expect(intent).toBeDefined();
+    expect(intent!.mechanism).toBe('schedule');
+    expect(intent!.sessionCount).toBe(5);
+    expect(intent!.command).toContain('/schedule');
+  });
+
+  it('raises no intent candidate below the intent session floor', async () => {
+    const storage = build([
+      { prefix: 'u0', ask: 'run the unit tests', n: 1, stepMs: DAY, startMs: T0 },
+      { prefix: 'u1', ask: 'execute the test suite', n: 1, stepMs: DAY, startMs: T0 + 1 * DAY },
+      { prefix: 'u2', ask: 'check that vitest passes', n: 1, stepMs: DAY, startMs: T0 + 2 * DAY },
+      { prefix: 'u3', ask: 'verify the coverage report', n: 1, stepMs: DAY, startMs: T0 + 3 * DAY },
+    ]);
+    const r = await suggestLoops(storage);
+    expect(r.candidates.find((c) => c.source === 'intent')).toBeUndefined();
   });
 });
 

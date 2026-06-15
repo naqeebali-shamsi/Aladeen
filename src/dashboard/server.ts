@@ -175,6 +175,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, ctx: 
       sessionsScanned: r.sessionsScanned,
       humanAsksFound: r.humanAsksFound,
       noiseFiltered: r.noiseFiltered,
+      fanoutFiltered: r.fanoutFiltered,
       guardrail: r.guardrail,
       coverageNote: r.coverageNote,
       markdown: r.markdown,

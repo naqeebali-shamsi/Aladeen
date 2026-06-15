@@ -466,6 +466,7 @@ program
         sessionsScanned: report.sessionsScanned,
         humanAsksFound: report.humanAsksFound,
         noiseFiltered: report.noiseFiltered,
+        fanoutFiltered: report.fanoutFiltered,
       }, null, 2));
       return;
     }

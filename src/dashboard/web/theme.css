@@ -352,6 +352,7 @@ a { color: var(--accent); }
 }
 .safety-mutating  { color: var(--danger); }
 .safety-read-only { color: var(--ok); }
+.loop-src { color: var(--dim); font-size: var(--fs-caption); }
 .loop-sep { color: var(--dim); text-align: center; letter-spacing: 0.4em; }
 
 .interface .change-shaped { color: var(--dim); }
