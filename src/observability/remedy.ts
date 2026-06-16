@@ -52,7 +52,7 @@ export interface RemedyFix {
 }
 
 export interface RemedyRule {
-  id: 'worktree_collision' | 'lint_loop';
+  id: 'worktree_collision' | 'lint_loop' | 'binary_not_found';
   matchErrorClass: ErrorClass;
   // When set, the rule fires ONLY if it returns true for the failing sample (e.g. editLoops
   // present). Keeps `lint_loop` from asserting a loop the data never proves — a lone tsc failure
@@ -105,8 +105,11 @@ export interface SuggestOptions {
 
 const FAILURE_OUTCOMES: readonly SessionOutcome[] = ['errored', 'interrupted', 'gave_up'];
 
-// DATA-only registry. EXACTLY TWO entries in v1 (NON-GOAL to add more). The primary anchor for
-// each citation is the named node/symbol in `what`; line numbers are best-effort and may rot.
+// DATA-only registry — the curated Class-A playbook. Grows DELIBERATELY: a runnable entry is added
+// only when a real, detected failure shape has a SAFE, proven repo/environment repair (the
+// deps-not-installed family today: worktree_collision + binary_not_found). Class-B shapes (agent-loop
+// tuning: lint_loop, rate_limit, timeout, …) and unsafe ones (auth, network, permission_denied) stay
+// suggest-only. Primary citation anchor is the named node/symbol in `what`; line numbers may rot.
 export const REMEDY_RULES: readonly RemedyRule[] = [
   {
     id: 'worktree_collision',
@@ -131,6 +134,27 @@ export const REMEDY_RULES: readonly RemedyRule[] = [
       summary: "Install dependencies in an isolated worktree (`git worktree add` does not copy node_modules).",
       note: 'Runs your project\'s package-manager install in a throwaway worktree, then shows the diff. '
         + 'Your working tree is never touched; nothing is merged without you.',
+    },
+  },
+  {
+    id: 'binary_not_found',
+    matchErrorClass: 'binary_not_found',
+    headline: 'A command the run needed was not found on PATH — commonly a project-local CLI '
+      + "(eslint, tsc, vite, prettier) whose deps aren't installed.",
+    remedyText:
+      'When the missing command is a project-local tool, the cause is usually uninstalled dependencies '
+      + '(node_modules/.bin not populated) — the fix is to install the project\'s deps. If the missing '
+      + 'command is a SYSTEM binary (git, python, docker), installing deps will NOT help; confirm which '
+      + 'before acting.',
+    citations: [],
+    // Class A — RUNNABLE (same deps-not-installed family + safe install repair as worktree_collision).
+    // The executor only acts when the target is a node project (package.json present), so a system-
+    // binary miss in a non-node repo is reported not-applicable rather than mis-repaired.
+    fix: {
+      kind: 'install-deps',
+      summary: 'Install dependencies so project-local CLIs resolve (populates node_modules/.bin).',
+      note: 'Runs your project\'s package-manager install in a throwaway worktree, then shows the diff. '
+        + 'Only helps if the missing command is a project-local tool; your working tree is never touched.',
     },
   },
   {
@@ -342,12 +366,14 @@ function toResolvedSibling(
 
 // Verb discipline: the evidence path BANS 'fix'/'will fix'/'do this'. The word 'fix' appears only
 // on the known-fix tier and inside the literal phrase 'not a fix'.
-function guardrailFor(tier: RemedyTier, nFailed: number, nResolved: number): string {
+function guardrailFor(tier: RemedyTier, nFailed: number, nResolved: number, runnable = false): string {
   switch (tier) {
     case 'known-fix':
-      return 'This shape matches a solved bug in your own engine; the citation points at the fix '
-        + 'that landed for it. Confirm it is the same cause before acting. Read-only suggestion — '
-        + 'Aladeen does not run it.';
+      return runnable
+        ? 'This shape matches a curated, proven Class-A fix. Confirm it is the same cause before acting. '
+          + 'Read-only by default — run it with `remedy --apply` (isolated worktree; you approve the diff; nothing merged).'
+        : 'This shape matches a curated known fix, but it is Class B (agent-loop guidance, not a repo/env '
+          + 'repair) so Aladeen will not run it — actuate it via `lessons --apply`. Confirm the cause first.';
     case 'medium':
       return `n=${nResolved} resolved session(s) shared this shape; here is what they touched and `
         + 'what they were asked. This is a lead, not a fix — judge it yourself. Aladeen does not '
@@ -378,7 +404,7 @@ interface FinalizeArgs {
   nFailed: number; nResolved: number; coverageNote: string; maxExcerpt: number;
 }
 function finalize(a: FinalizeArgs): RemedyResult {
-  const guardrail = guardrailFor(a.tier, a.nFailed, a.nResolved);
+  const guardrail = guardrailFor(a.tier, a.nFailed, a.nResolved, a.ruleMatches[0]?.fix != null);
   const markdown = buildRemedyMarkdown(a, guardrail);
   return {
     fingerprint: a.fingerprint, failingDigests: a.failingDigests, subSignature: a.subSignature,

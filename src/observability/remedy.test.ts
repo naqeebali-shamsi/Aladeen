@@ -50,9 +50,11 @@ function traceWith(
 }
 
 describe('helpers + registry', () => {
-  it('ships exactly two remedy rules', () => {
-    expect(REMEDY_RULES).toHaveLength(2);
-    expect(REMEDY_RULES.map((r) => r.id).sort()).toEqual(['lint_loop', 'worktree_collision']);
+  it('ships the curated playbook: deps-family runnable + lint_loop suggest-only', () => {
+    expect(REMEDY_RULES).toHaveLength(3);
+    expect(REMEDY_RULES.map((r) => r.id).sort()).toEqual(['binary_not_found', 'lint_loop', 'worktree_collision']);
+    // runnable ⟺ a Class-A fix is attached
+    expect(REMEDY_RULES.filter((r) => r.fix).map((r) => r.id).sort()).toEqual(['binary_not_found', 'worktree_collision']);
   });
   it('subSignature drops outcome, keeps agent + sorted nonzero classes; empty when none', () => {
     expect(subSignature(d({ agentCliName: 'codex', errorCounts: { tool_error: 2, parse_error: 1 } }))).toBe('codex|parse_error,tool_error');

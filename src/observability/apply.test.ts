@@ -37,6 +37,9 @@ const lintLoopKnownFix = () => suggestRemedy('fp_ll', fakeStorage([
 const noneTier = () => suggestRemedy('fp_pf', fakeStorage([
   d({ sessionId: 'pf', outcome: 'gave_up', errorCounts: { parse_error: 1 }, toolFailureCount: 1, patternFingerprint: 'fp_pf' }),
 ]));
+const binNotFound = () => suggestRemedy('fp_bnf', fakeStorage([
+  d({ sessionId: 'bnf', outcome: 'gave_up', errorCounts: { binary_not_found: 4 }, toolFailureCount: 4, patternFingerprint: 'fp_bnf' }),
+]));
 
 // --- mock deps with call tracking -------------------------------------------
 
@@ -58,14 +61,15 @@ function mockDeps(over: { plan?: InstallPlan | null; installExit?: number; workt
 // --- registry / gate --------------------------------------------------------
 
 describe('runnable-fix registry', () => {
-  it('worktree_collision carries a runnable install-deps fix; lint_loop does not (Class B)', () => {
-    const wc = REMEDY_RULES.find((r) => r.id === 'worktree_collision')!;
-    const ll = REMEDY_RULES.find((r) => r.id === 'lint_loop')!;
-    expect(wc.fix?.kind).toBe('install-deps');
-    expect(ll.fix).toBeUndefined();
+  it('deps-family rules carry an install-deps fix; lint_loop (Class B) does not', () => {
+    const byId = (id: string) => REMEDY_RULES.find((r) => r.id === id)!;
+    expect(byId('worktree_collision').fix?.kind).toBe('install-deps');
+    expect(byId('binary_not_found').fix?.kind).toBe('install-deps');
+    expect(byId('lint_loop').fix).toBeUndefined();
   });
   it('runnableFix unwraps a known-fix-with-fix, returns null otherwise', async () => {
     expect(runnableFix(await wcKnownFix())?.rule.id).toBe('worktree_collision');
+    expect(runnableFix(await binNotFound())?.rule.id).toBe('binary_not_found');
     expect(runnableFix(await lintLoopKnownFix())).toBeNull();
     expect(runnableFix(await noneTier())).toBeNull();
   });
