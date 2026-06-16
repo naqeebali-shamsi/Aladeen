@@ -100,6 +100,18 @@ describe('dashboard server', () => {
     expect(res.status).toBe(404);
   });
 
+  it('GET /api/loops returns a read-only loop-candidate report', async () => {
+    const { url } = await bootServer();
+    const res = await fetch(`${url}api/loops`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.candidates)).toBe(true);
+    for (const k of ['sessionsScanned', 'humanAsksFound', 'guardrail', 'coverageNote', 'markdown']) {
+      expect(body).toHaveProperty(k);
+    }
+    expect(body.guardrail.toLowerCase()).toContain('never creates or runs them');
+  });
+
   it('GET /api/remedy returns a known-fix remedy for the worktree_collision bucket', async () => {
     const { url } = await bootServer();
     const res = await fetch(`${url}api/remedy/deadbeefdeadbeef`);

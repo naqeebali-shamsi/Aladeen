@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { IngestStorage } from '../observability/storage.js';
 import { replayFingerprint } from '../observability/replay.js';
 import { suggestRemedy } from '../observability/remedy.js';
+import { suggestLoops } from '../observability/loops.js';
 import { buildOverview } from './api.js';
 
 // The FLIGHT RECORDER server. A thin, read-only `node:http` shell over the
@@ -20,6 +21,8 @@ import { buildOverview } from './api.js';
 //   GET /api/digests.json   -> the single hero payload (buildOverview)
 //   GET /api/trace/:id      -> one full SessionTrace (lazy, for the TRACE screen)
 //   GET /api/replay/:fp     -> replayFingerprint markdown (read-only drill-down)
+//   GET /api/remedy/:fp     -> suggestRemedy result (read-only remedy)
+//   GET /api/loops          -> suggestLoops report (read-only loop candidates)
 //   GET /*                  -> static SPA from ./web (SPA fallback to index.html)
 
 export interface DashboardServerOptions {
@@ -160,6 +163,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, ctx: 
       resolvedSiblings: r.resolvedSiblings,
       nFailed: r.nFailed,
       nResolved: r.nResolved,
+      markdown: r.markdown,
+    });
+    return;
+  }
+
+  if (pathname === '/api/loops') {
+    const r = await suggestLoops(ctx.storage, { minSessions: 3 });
+    sendJson(res, 200, {
+      candidates: r.candidates,
+      sessionsScanned: r.sessionsScanned,
+      humanAsksFound: r.humanAsksFound,
+      noiseFiltered: r.noiseFiltered,
+      fanoutFiltered: r.fanoutFiltered,
+      guardrail: r.guardrail,
+      coverageNote: r.coverageNote,
       markdown: r.markdown,
     });
     return;

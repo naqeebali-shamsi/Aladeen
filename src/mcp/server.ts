@@ -4,6 +4,7 @@ import { IngestStorage } from '../observability/storage.js';
 import { formatReport } from '../observability/report.js';
 import { replayFingerprint } from '../observability/replay.js';
 import { suggestRemedy } from '../observability/remedy.js';
+import { suggestLoops } from '../observability/loops.js';
 import type { RunDigest } from '../observability/session-trace.js';
 import { LessonStore } from '../learning/store.js';
 import { rankLessons, formatLessons } from '../learning/learn.js';
@@ -57,6 +58,9 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
         'read-only remedy; it suggests, never executes. Use query_lessons to read the',
         'distilled, decay-ranked guardrails Aladeen has mined across sessions — read',
         'these at the start of a task to avoid the mistakes that recurred before.',
+        'Use suggest_loops to see which recurring workflows could be automated as a',
+        'Claude Code /loop, a /schedule routine, or a .claude/loop.md check — read-only',
+        'suggestions, it never creates or runs them.',
         'Resources expose the raw digests and individual session traces.',
       ].join(' '),
     },
@@ -222,6 +226,52 @@ export function buildServer(opts: BuildServerOptions = {}): McpServer {
           activeLessons: all.filter((l) => l.status !== 'retired').length,
           returned: ranked.length,
           lessons: ranked.map(toStructuredLesson),
+        },
+      };
+    },
+  );
+
+  // ── Tool 5: suggest_loops ─────────────────────────────────────────────
+  server.registerTool(
+    'suggest_loops',
+    {
+      title: 'Suggest loop automations from recurring work',
+      description:
+        "Infers which recurring workflows in the user's session history could become a Claude Code " +
+        'automation — a /loop (self-paced iterate-until-done or a fixed-interval poll), a /schedule ' +
+        'routine, or a .claude/loop.md maintenance check. Clusters the first HUMAN ask across ' +
+        'sessions (origin-tagged), scores recurrence / cadence / safety, and maps each to a mechanism ' +
+        'with a concrete suggested command. Read-only — it SUGGESTS loops, it NEVER creates or runs ' +
+        'them. Cross-CLI: recurring work in any ingested CLI is a candidate to automate as a Claude loop.',
+      inputSchema: {
+        min_sessions: z.number().int().positive().max(50).optional()
+          .describe('Recurrence floor for a candidate. Default 3.'),
+      },
+    },
+    async (input) => {
+      const result = await suggestLoops(storage, { minSessions: input.min_sessions ?? 3 });
+      // Empty candidate set is a valid answer (like query_lessons), not a lookup error.
+      return {
+        content: [{ type: 'text', text: result.markdown }],
+        structuredContent: {
+          sessionsScanned: result.sessionsScanned,
+          humanAsksFound: result.humanAsksFound,
+          noiseFiltered: result.noiseFiltered,
+          fanoutFiltered: result.fanoutFiltered,
+          candidateCount: result.candidates.length,
+          candidates: result.candidates.map((c) => ({
+            label: c.label,
+            source: c.source,
+            class: c.class,
+            mechanism: c.mechanism,
+            command: c.command,
+            rationale: c.rationale,
+            sessionCount: c.sessionCount,
+            providers: c.providers,
+            safety: c.safety,
+            cadence: c.cadence,
+            sessionIds: c.sessionIds,
+          })),
         },
       };
     },

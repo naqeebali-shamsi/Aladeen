@@ -19,6 +19,7 @@ import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
 import { replayFingerprint } from './observability/replay.js';
 import { suggestRemedy } from './observability/remedy.js';
+import { suggestLoops } from './observability/loops.js';
 import { runIngestPipeline } from './observability/ingest-runner.js';
 import { runLearn, formatLearnSummary, formatLessons, rankLessons } from './learning/learn.js';
 import { LessonStore } from './learning/store.js';
@@ -445,6 +446,31 @@ program
       process.exit(1);
     }
     console.log(result.markdown);
+  });
+
+program
+  .command('loops')
+  .description('Suggest loop automations from recurring shapes in your session history: which workflows could become a Claude Code /loop, a /schedule routine, or a .claude/loop.md check. Read-only; suggests, never creates or runs them.')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .option('--min-sessions <n>', 'Recurrence floor for a candidate', '3')
+  .option('--json', 'Print machine-readable candidates')
+  .action(async (opts: { repoRoot: string; minSessions: string; json?: boolean }) => {
+    const storage = new IngestStorage(opts.repoRoot);
+    const min = Number.parseInt(opts.minSessions, 10);
+    const report = await suggestLoops(storage, {
+      minSessions: Number.isFinite(min) ? min : 3,
+    });
+    if (opts.json) {
+      console.log(JSON.stringify({
+        candidates: report.candidates,
+        sessionsScanned: report.sessionsScanned,
+        humanAsksFound: report.humanAsksFound,
+        noiseFiltered: report.noiseFiltered,
+        fanoutFiltered: report.fanoutFiltered,
+      }, null, 2));
+      return;
+    }
+    console.log(report.markdown);
   });
 
 program
