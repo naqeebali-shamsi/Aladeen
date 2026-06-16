@@ -38,6 +38,19 @@ export interface RemedyCitation {
   what: string;   // names the node/symbol: 'bootstrap-deps node', 'maxTotalRetries', etc.
 }
 
+// A CURATED, RUNNABLE fix — Class A only (repo/environment-state repair, NOT agent steering).
+// DATA only: no functions, no I/O. The executor lives in apply.ts so remedy.ts stays pure
+// (load-bearing invariant, asserted by remedy.test.ts). A rule WITHOUT a `fix` is suggest-only —
+// either Class B (agent guidance; see `aladeen lessons --apply`) or simply not yet curated.
+// `remedy --apply` runs ONLY rules whose tier resolves to known-fix AND that carry a `fix`.
+export interface RemedyFix {
+  // Behaviour selector. v1: 'install-deps' = detect the target repo's package manager and run its
+  // install inside an isolated worktree. New kinds are added as the playbook grows (Class A only).
+  kind: 'install-deps';
+  summary: string;   // one line: what running this actually does
+  note: string;      // honest pre-flight note (isolation + consent), shown before execution
+}
+
 export interface RemedyRule {
   id: 'worktree_collision' | 'lint_loop';
   matchErrorClass: ErrorClass;
@@ -48,6 +61,8 @@ export interface RemedyRule {
   headline: string;     // shape statement, NOT a per-session diagnosis
   remedyText: string;   // 'The known fix for this shape was …' (past tense, about the engine)
   citations: RemedyCitation[];
+  // Present ⟺ this known-fix is a runnable Class-A repair. Absent ⟹ suggest-only (Class B / uncurated).
+  fix?: RemedyFix;
 }
 
 export interface ChangeShapedFile {
@@ -108,9 +123,21 @@ export const REMEDY_RULES: readonly RemedyRule[] = [
         what: "the 'bootstrap-deps' node runs the install command in the worktree before any gate",
       },
     ],
+    // Class A — RUNNABLE. The shape (a git worktree missing node_modules) and its fix (run the
+    // project's install) are environment-state, not agent steering, so apply.ts can repair it in
+    // an isolated worktree and hand back the diff. This is the canonical playbook entry.
+    fix: {
+      kind: 'install-deps',
+      summary: "Install dependencies in an isolated worktree (`git worktree add` does not copy node_modules).",
+      note: 'Runs your project\'s package-manager install in a throwaway worktree, then shows the diff. '
+        + 'Your working tree is never touched; nothing is merged without you.',
+    },
   },
   {
     id: 'lint_loop',
+    // Class B — SUGGEST-ONLY (no `fix`). Its remedy is "bound the deterministic fix/check retries",
+    // i.e. tune the AGENT/engine's retry config — that lives in the agent's loop, not in repo state,
+    // so Aladeen cannot honestly "run" it. Agent guidance actuates via `aladeen lessons --apply`.
     matchErrorClass: 'lint_loop',
     // The lint_loop ErrorClass is produced by the ingester regex /lint|eslint|tsc.*error/ on ANY
     // failed lint/tsc output — it does NOT detect a loop. Gate on actual loop evidence so the rule
@@ -132,6 +159,16 @@ export const REMEDY_RULES: readonly RemedyRule[] = [
     ],
   },
 ];
+
+// Resolve whether a remedy is RUNNABLE: known-fix tier AND the matched rule carries a curated
+// Class-A `fix`. Pure — inspects data only (no I/O). apply.ts and the CLI both gate on this, so the
+// "what may run" decision lives beside the rules, not in the executor.
+export function runnableFix(result: RemedyResult): { rule: RemedyRule; fix: RemedyFix } | null {
+  if (result.tier !== 'known-fix') return null;
+  const rule = result.ruleMatches[0];
+  if (!rule?.fix) return null;
+  return { rule, fix: rule.fix };
+}
 
 // --- Pure helpers (exported for tests) --------------------------------------
 

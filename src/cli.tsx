@@ -19,6 +19,7 @@ import { IngestStorage } from './observability/storage.js';
 import { formatReport } from './observability/report.js';
 import { replayFingerprint } from './observability/replay.js';
 import { suggestRemedy } from './observability/remedy.js';
+import { applyRemedy, defaultApplyDeps } from './observability/apply.js';
 import { suggestLoops } from './observability/loops.js';
 import { runIngestPipeline } from './observability/ingest-runner.js';
 import { runLearn, formatLearnSummary, formatLessons, rankLessons } from './learning/learn.js';
@@ -430,10 +431,13 @@ program
 
 program
   .command('remedy <fingerprint>')
-  .description('Suggest a read-only remedy for a failing fingerprint: a known-fix pointer when the shape is a solved bug, else prior sessions of the same shape that later completed. Suggests, never executes.')
-  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .description('Remedy a failing fingerprint. Default: read-only suggestion (a known-fix pointer, or prior sessions of the same shape that later completed). With --apply: run a proven Class-A known-fix in an isolated worktree and show the diff — it never merges and never runs your agent.')
+  .option('--repo-root <path>', 'Repository root (where .aladeen/ lives)', process.cwd())
   .option('--max-samples <n>', 'Max resolved siblings to deep-load for evidence', '3')
-  .action(async (fp: string, opts: { repoRoot: string; maxSamples: string }) => {
+  .option('--apply', 'Opt-in: run a proven Class-A known-fix in an isolated worktree (suggests only, otherwise)')
+  .option('--dir <path>', 'Target repo to repair when --apply (defaults to --repo-root)')
+  .option('--keep', 'Keep the isolated worktree after --apply for inspection')
+  .action(async (fp: string, opts: { repoRoot: string; maxSamples: string; apply?: boolean; dir?: string; keep?: boolean }) => {
     const storage = new IngestStorage(opts.repoRoot);
     const max = Number.parseInt(opts.maxSamples, 10);
     const result = await suggestRemedy(fp, storage, {
@@ -446,6 +450,18 @@ program
       process.exit(1);
     }
     console.log(result.markdown);
+
+    if (!opts.apply) return;
+
+    // --apply: opt-in, isolated execution of a runnable Class-A known-fix ONLY. `runnableFix`
+    // (inside applyRemedy) declines anything else honestly; nothing touches the real working tree.
+    const targetRepo = opts.dir ?? opts.repoRoot;
+    const applyResult = await applyRemedy(result, { keepWorktree: opts.keep }, defaultApplyDeps(targetRepo));
+    console.log('\n' + applyResult.markdown);
+    // Exit semantics: declined (not runnable) → 0; ran → surface the fix's own exit code so CI sees failures.
+    if (applyResult.applied && typeof applyResult.exitCode === 'number' && applyResult.exitCode !== 0) {
+      process.exit(applyResult.exitCode);
+    }
   });
 
 program
