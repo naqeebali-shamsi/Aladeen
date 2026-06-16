@@ -38,8 +38,21 @@ export interface RemedyCitation {
   what: string;   // names the node/symbol: 'bootstrap-deps node', 'maxTotalRetries', etc.
 }
 
+// A CURATED, RUNNABLE fix — Class A only (repo/environment-state repair, NOT agent steering).
+// DATA only: no functions, no I/O. The executor lives in apply.ts so remedy.ts stays pure
+// (load-bearing invariant, asserted by remedy.test.ts). A rule WITHOUT a `fix` is suggest-only —
+// either Class B (agent guidance; see `aladeen lessons --apply`) or simply not yet curated.
+// `remedy --apply` runs ONLY rules whose tier resolves to known-fix AND that carry a `fix`.
+export interface RemedyFix {
+  // Behaviour selector. v1: 'install-deps' = detect the target repo's package manager and run its
+  // install inside an isolated worktree. New kinds are added as the playbook grows (Class A only).
+  kind: 'install-deps';
+  summary: string;   // one line: what running this actually does
+  note: string;      // honest pre-flight note (isolation + consent), shown before execution
+}
+
 export interface RemedyRule {
-  id: 'worktree_collision' | 'lint_loop';
+  id: 'worktree_collision' | 'lint_loop' | 'binary_not_found';
   matchErrorClass: ErrorClass;
   // When set, the rule fires ONLY if it returns true for the failing sample (e.g. editLoops
   // present). Keeps `lint_loop` from asserting a loop the data never proves — a lone tsc failure
@@ -48,6 +61,8 @@ export interface RemedyRule {
   headline: string;     // shape statement, NOT a per-session diagnosis
   remedyText: string;   // 'The known fix for this shape was …' (past tense, about the engine)
   citations: RemedyCitation[];
+  // Present ⟺ this known-fix is a runnable Class-A repair. Absent ⟹ suggest-only (Class B / uncurated).
+  fix?: RemedyFix;
 }
 
 export interface ChangeShapedFile {
@@ -90,8 +105,11 @@ export interface SuggestOptions {
 
 const FAILURE_OUTCOMES: readonly SessionOutcome[] = ['errored', 'interrupted', 'gave_up'];
 
-// DATA-only registry. EXACTLY TWO entries in v1 (NON-GOAL to add more). The primary anchor for
-// each citation is the named node/symbol in `what`; line numbers are best-effort and may rot.
+// DATA-only registry — the curated Class-A playbook. Grows DELIBERATELY: a runnable entry is added
+// only when a real, detected failure shape has a SAFE, proven repo/environment repair (the
+// deps-not-installed family today: worktree_collision + binary_not_found). Class-B shapes (agent-loop
+// tuning: lint_loop, rate_limit, timeout, …) and unsafe ones (auth, network, permission_denied) stay
+// suggest-only. Primary citation anchor is the named node/symbol in `what`; line numbers may rot.
 export const REMEDY_RULES: readonly RemedyRule[] = [
   {
     id: 'worktree_collision',
@@ -108,9 +126,42 @@ export const REMEDY_RULES: readonly RemedyRule[] = [
         what: "the 'bootstrap-deps' node runs the install command in the worktree before any gate",
       },
     ],
+    // Class A — RUNNABLE. The shape (a git worktree missing node_modules) and its fix (run the
+    // project's install) are environment-state, not agent steering, so apply.ts can repair it in
+    // an isolated worktree and hand back the diff. This is the canonical playbook entry.
+    fix: {
+      kind: 'install-deps',
+      summary: "Install dependencies in an isolated worktree (`git worktree add` does not copy node_modules).",
+      note: 'Runs your project\'s package-manager install in a throwaway worktree, then shows the diff. '
+        + 'Your working tree is never touched; nothing is merged without you.',
+    },
+  },
+  {
+    id: 'binary_not_found',
+    matchErrorClass: 'binary_not_found',
+    headline: 'A command the run needed was not found on PATH — commonly a project-local CLI '
+      + "(eslint, tsc, vite, prettier) whose deps aren't installed.",
+    remedyText:
+      'When the missing command is a project-local tool, the cause is usually uninstalled dependencies '
+      + '(node_modules/.bin not populated) — the fix is to install the project\'s deps. If the missing '
+      + 'command is a SYSTEM binary (git, python, docker), installing deps will NOT help; confirm which '
+      + 'before acting.',
+    citations: [],
+    // Class A — RUNNABLE (same deps-not-installed family + safe install repair as worktree_collision).
+    // The executor only acts when the target is a node project (package.json present), so a system-
+    // binary miss in a non-node repo is reported not-applicable rather than mis-repaired.
+    fix: {
+      kind: 'install-deps',
+      summary: 'Install dependencies so project-local CLIs resolve (populates node_modules/.bin).',
+      note: 'Runs your project\'s package-manager install in a throwaway worktree, then shows the diff. '
+        + 'Only helps if the missing command is a project-local tool; your working tree is never touched.',
+    },
   },
   {
     id: 'lint_loop',
+    // Class B — SUGGEST-ONLY (no `fix`). Its remedy is "bound the deterministic fix/check retries",
+    // i.e. tune the AGENT/engine's retry config — that lives in the agent's loop, not in repo state,
+    // so Aladeen cannot honestly "run" it. Agent guidance actuates via `aladeen lessons --apply`.
     matchErrorClass: 'lint_loop',
     // The lint_loop ErrorClass is produced by the ingester regex /lint|eslint|tsc.*error/ on ANY
     // failed lint/tsc output — it does NOT detect a loop. Gate on actual loop evidence so the rule
@@ -132,6 +183,16 @@ export const REMEDY_RULES: readonly RemedyRule[] = [
     ],
   },
 ];
+
+// Resolve whether a remedy is RUNNABLE: known-fix tier AND the matched rule carries a curated
+// Class-A `fix`. Pure — inspects data only (no I/O). apply.ts and the CLI both gate on this, so the
+// "what may run" decision lives beside the rules, not in the executor.
+export function runnableFix(result: RemedyResult): { rule: RemedyRule; fix: RemedyFix } | null {
+  if (result.tier !== 'known-fix') return null;
+  const rule = result.ruleMatches[0];
+  if (!rule?.fix) return null;
+  return { rule, fix: rule.fix };
+}
 
 // --- Pure helpers (exported for tests) --------------------------------------
 
@@ -305,12 +366,14 @@ function toResolvedSibling(
 
 // Verb discipline: the evidence path BANS 'fix'/'will fix'/'do this'. The word 'fix' appears only
 // on the known-fix tier and inside the literal phrase 'not a fix'.
-function guardrailFor(tier: RemedyTier, nFailed: number, nResolved: number): string {
+function guardrailFor(tier: RemedyTier, nFailed: number, nResolved: number, runnable = false): string {
   switch (tier) {
     case 'known-fix':
-      return 'This shape matches a solved bug in your own engine; the citation points at the fix '
-        + 'that landed for it. Confirm it is the same cause before acting. Read-only suggestion — '
-        + 'Aladeen does not run it.';
+      return runnable
+        ? 'This shape matches a curated, proven Class-A fix. Confirm it is the same cause before acting. '
+          + 'Read-only by default — run it with `remedy --apply` (isolated worktree; you approve the diff; nothing merged).'
+        : 'This shape matches a curated known fix, but it is Class B (agent-loop guidance, not a repo/env '
+          + 'repair) so Aladeen will not run it — actuate it via `lessons --apply`. Confirm the cause first.';
     case 'medium':
       return `n=${nResolved} resolved session(s) shared this shape; here is what they touched and `
         + 'what they were asked. This is a lead, not a fix — judge it yourself. Aladeen does not '
@@ -341,7 +404,7 @@ interface FinalizeArgs {
   nFailed: number; nResolved: number; coverageNote: string; maxExcerpt: number;
 }
 function finalize(a: FinalizeArgs): RemedyResult {
-  const guardrail = guardrailFor(a.tier, a.nFailed, a.nResolved);
+  const guardrail = guardrailFor(a.tier, a.nFailed, a.nResolved, a.ruleMatches[0]?.fix != null);
   const markdown = buildRemedyMarkdown(a, guardrail);
   return {
     fingerprint: a.fingerprint, failingDigests: a.failingDigests, subSignature: a.subSignature,
