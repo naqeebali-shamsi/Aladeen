@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionEvent, SessionTrace, SessionOutcome } from '../observability/session-trace.js';
+import { projectIdForPath } from './scope.js';
 import { computeDigest } from '../observability/digest.js';
 import {
   detectCompletedButThrashed,
@@ -443,5 +444,26 @@ describe('runDetectors', () => {
       'completed',
     );
     expect(runDetectors(input)).toHaveLength(0);
+  });
+});
+
+
+describe('detector project provenance', () => {
+  it('carries a known project identity on emitted candidates without changing their shape keys', () => {
+    const input = inputFor([errorEv('timeout'), errorEv('timeout'), errorEv('timeout')], 'errored');
+    input.trace.agentCli.name = 'codex';
+    input.trace.workspace.cwdScrubbed = '/projects/alpha';
+    const candidates = runDetectors(input);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].projectId).toBe(projectIdForPath('/projects/alpha'));
+    expect(candidates[0].candidateKey).toBe('error-storm|timeout');
+  });
+
+  it('leaves unverified workspace metadata unknown rather than guessing a project', () => {
+    const input = inputFor([errorEv('timeout'), errorEv('timeout'), errorEv('timeout')], 'errored');
+    input.trace.agentCli.name = 'claude-code';
+    const candidates = runDetectors(input);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].projectId).toBeUndefined();
   });
 });

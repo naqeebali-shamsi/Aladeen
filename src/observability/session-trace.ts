@@ -56,7 +56,7 @@ export const ScrubbingSchema = z.object({
   })),
   // Set true when ingester opts into preserving certain content (e.g. user
   // explicitly allowed file-content retention for one session). Default false.
-  optedInRetention: z.record(z.enum(SCRUB_REASONS), z.boolean()).optional(),
+  optedInRetention: z.partialRecord(z.enum(SCRUB_REASONS), z.boolean()).optional(),
 });
 export type Scrubbing = z.infer<typeof ScrubbingSchema>;
 
@@ -104,7 +104,7 @@ export const ToolCallEventSchema = EventBaseSchema.extend({
   kind: z.literal('tool_call'),
   toolName: z.string(),          // normalized: Read, Edit, Bash, etc.
   callId: z.string(),            // for pairing with tool_result
-  args: z.record(z.unknown()),   // scrubbed
+  args: z.record(z.string(), z.unknown()),   // scrubbed
 });
 
 export const ToolResultEventSchema = EventBaseSchema.extend({
@@ -236,7 +236,7 @@ export const SessionTraceSchema = z.object({
   scrubbing: ScrubbingSchema,
   // Free-form. Ingesters drop format-specific extras here. Anything that
   // graduates to first-class moves out of extras into a real field.
-  ingesterExtras: z.record(z.unknown()).optional(),
+  ingesterExtras: z.record(z.string(), z.unknown()).optional(),
 });
 export type SessionTrace = z.infer<typeof SessionTraceSchema>;
 
@@ -256,7 +256,7 @@ export const RunDigestSchema = z.object({
   // Distinct tools used, count each.
   toolUsage: z.record(z.string(), z.number().int().nonnegative()),
   // Top errors by class.
-  errorCounts: z.record(z.enum(ERROR_CLASSES), z.number().int().nonnegative()),
+  errorCounts: z.partialRecord(z.enum(ERROR_CLASSES), z.number().int().nonnegative()),
   // Files touched. Path basenames are enough for most pattern queries.
   filesChanged: z.array(z.string()),
   // How many tool_result events came back ok=false.

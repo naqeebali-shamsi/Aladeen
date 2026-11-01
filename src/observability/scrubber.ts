@@ -1,18 +1,19 @@
 import os from 'node:os';
 import type { Scrubbing } from './session-trace.js';
 
-// Scrubbing strips secrets/PII from text before it enters a SessionTrace.
+// Scrubbing strips secrets/home paths from text and truncates shell output
+// before it enters a SessionTrace.
 // Versioned so re-ingesting source artifacts with a newer scrubber produces
 // strictly better traces. Inline markers look like [REDACTED:<reason>] for
 // trivial grep + replay.
 
 export const SCRUBBER_VERSIONS = {
   secret: '1',
-  'path-home': '1',
+  'path-home': '2',
   'env-value': '1',
   pii: '1',
-  'shell-output': '1',
   'file-content': '1',
+  'shell-output': '1',
 } as const;
 
 // High-confidence secret patterns. False negatives are acceptable here (a
@@ -33,7 +34,6 @@ export interface ScrubberOptions {
   homeDir?: string;
   // Cap on tool/shell output length per scrubbed string. Default 2000.
   maxOutputChars?: number;
-  // When true, leave shell output untruncated. Useful for tests only.
   preserveOutput?: boolean;
 }
 
@@ -66,7 +66,7 @@ export class Scrubber {
   // Scrub a path: strip home dir, leave the rest intact (paths are
   // high-signal for replay and rarely contain secrets).
   scrubPath(input: string): string {
-    return this.replaceHome(input);
+    return this.replaceHome(input, true);
   }
 
   // Scrub the values of a structured tool-call args object. Keys stay,
@@ -101,8 +101,8 @@ export class Scrubber {
       'path-home': 0,
       'env-value': 0,
       pii: 0,
-      'shell-output': 0,
       'file-content': 0,
+      'shell-output': 0,
     };
 
     let text = input;
@@ -131,26 +131,31 @@ export class Scrubber {
     return { text, appliedPasses };
   }
 
-  private replaceHome(input: string): string {
+  private replaceHome(input: string, pathOnly = false): string {
     if (!this.homeDir) return input;
-    // Handle both posix and win32 separators in the home path. Compare
-    // case-insensitively on win32 since drive letters and user folders are
-    // typically not case-sensitive.
-    const candidates = new Set<string>([
-      this.homeDir,
-      this.homeDir.replace(/\\/g, '/'),
-      this.homeDir.replace(/\//g, '\\'),
-    ]);
+    // POSIX paths are case-sensitive. Windows-style homes accept separator
+    // and case variants, independent of the host running a fixture/import.
+    const windowsHome = /^[A-Za-z]:[\\/]/.test(this.homeDir) || /^(?:\\\\|\/\/)/.test(this.homeDir);
+    const candidates = windowsHome
+      ? new Set([this.homeDir, this.homeDir.replace(/\\/g, '/'), this.homeDir.replace(/\//g, '\\')])
+      : new Set([this.homeDir]);
     let out = input;
     for (const c of candidates) {
       if (!c) continue;
-      // Case-insensitive global replace without rebuilding a regex from
-      // unsanitized input.
-      const idx = (s: string) => s.toLowerCase().indexOf(c.toLowerCase());
-      let i = idx(out);
-      while (i !== -1) {
+      let cursor = 0;
+      for (;;) {
+        const i = windowsHome ? out.toLowerCase().indexOf(c.toLowerCase(), cursor) : out.indexOf(c, cursor);
+        if (i === -1 || (pathOnly && i !== 0)) break;
+        const next = out[i + c.length];
+        const separator = next === '/' || (windowsHome && next === '\\');
+        // A path must be the actual home or its descendant. In prose, quotes,
+        // whitespace and common punctuation may terminate a standalone home.
+        const boundary = next === undefined || separator || /[\\/]$/.test(c)
+          || (!pathOnly && /[\s"'`,;:!?()[\]{}]/.test(next));
+        if (!boundary) { cursor = i + c.length; continue; }
         out = out.slice(0, i) + '~' + out.slice(i + c.length);
-        i = idx(out);
+        if (pathOnly) break;
+        cursor = i + 1;
       }
     }
     return out;

@@ -118,6 +118,9 @@ export const MeasurementSchema = z.object({
   relativeReduction: z.number().optional(),
   // Sessions dropped from both windows because the source carried no clock.
   excludedNoTimestamp: z.number().int().nonnegative(),
+  // Optional so measurements written before scoped eligibility still parse.
+  excludedScope: z.number().int().nonnegative().optional(),
+  duplicateObservations: z.number().int().nonnegative().optional(),
   verdict: z.enum(MEASUREMENT_VERDICTS),
 });
 export type Measurement = z.infer<typeof MeasurementSchema>;
@@ -133,10 +136,13 @@ export const LessonSchema = z.object({
   candidateKey: z.string(),
   // The discriminating dimensions, denormalized from candidateKey so
   // consumers (dashboard, export) don't parse the key.
-  dims: z.record(z.string()),
+  dims: z.record(z.string(), z.string()),
   statement: z.string(),
   category: z.enum(LESSON_CATEGORIES),
   scope: z.object({
+    // Machine-local workspace identity. Missing means legacy/unknown; never
+    // infer a repository from evidence that did not identify one.
+    projectId: z.string().regex(/^project:[a-f0-9]{64}$/).optional(),
     // Providers the evidence came from ('claude-code', 'codex', ...).
     agentClis: z.array(z.string()),
     // True once >=2 distinct providers corroborate — a lesson learned on one

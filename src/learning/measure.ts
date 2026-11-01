@@ -1,5 +1,7 @@
 import type { Lesson, Measurement, MeasurementVerdict } from './lesson.js';
 
+const KNOWN_PROVIDERS = new Set(['claude-code', 'opencode', 'codex', 'openclaw', 'aladeen']);
+
 // Recurrence measurement — the step that turns an actuated lesson into a
 // VERIFIED one (or surfaces that it isn't working). Pure: no I/O, clock
 // injected.
@@ -8,7 +10,9 @@ import type { Lesson, Measurement, MeasurementVerdict } from './lesson.js';
 // AGENTS.md at time T, did its failure shape recur in a SMALLER fraction of
 // sessions than before T? We split every timestamped session into a
 // pre-actuation and post-actuation window by its own clock, and compare the
-// fraction of sessions exhibiting the lesson's candidateKey.
+// fraction of eligible sessions exhibiting the lesson's candidateKey. Only
+// exact known project identity and observed providers are eligible; universal
+// provider scope never grants cross-project authority.
 //
 // This is OBSERVATIONAL, not a controlled experiment. Three honesty rules are
 // baked in and must survive downstream rendering:
@@ -18,9 +22,8 @@ import type { Lesson, Measurement, MeasurementVerdict } from './lesson.js';
 //      regression to the mean alone predicts some drop; session mix also drifts
 //      for reasons unrelated to the guardrail.
 //   3. Only `improved` with a real post-window sample flips actuated->verified.
-//      `regressed` is surfaced, never auto-acted on (actuated lessons never
-//      auto-retire — that invariant lives in consolidate.ts and is not weakened
-//      here).
+//      Verified status is withdrawn when the current scoped measurement no
+//      longer supports improvement. Lessons are never retired here.
 
 export interface MeasureParams {
   // Below this many post-actuation sessions, refuse to judge.
@@ -49,12 +52,19 @@ export interface SessionObservation {
   // carried no clock (those sessions can't be windowed and are excluded).
   timestampMs: number | null;
   candidateKeys: Set<string>;
+  // Identity is explicit: missing project/provider observations cannot supply
+  // evidence that a project-specific rule helped.
+  projectId?: string;
+  agentCli?: string;
+  // When available, detect sessions that began before actuation and ended
+  // afterward. They were not exposed to the rule for the entire session.
+  startedAtMs?: number | null;
 }
 
 // Measure one lesson. Returns null when the lesson has not been actuated
 // (nothing to measure against) or its appliedAt is unparseable.
 export function measureLesson(
-  lesson: Pick<Lesson, 'candidateKey' | 'actuation'>,
+  lesson: Pick<Lesson, 'candidateKey' | 'actuation' | 'scope'>,
   observations: SessionObservation[],
   now: Date,
   params: MeasureParams = DEFAULT_MEASURE_PARAMS,
@@ -68,14 +78,47 @@ export function measureLesson(
   let postSessions = 0;
   let postExhibiting = 0;
   let excludedNoTimestamp = 0;
+  let excludedScope = 0;
+  let duplicateObservations = 0;
 
-  for (const obs of observations) {
-    if (obs.timestampMs === null) {
+  // Identical copies count once. A conflicting duplicate makes the entire
+  // session unusable, so input ordering cannot decide which version wins.
+  const sessions = new Map<string, { observation: SessionObservation; count: number; conflict: boolean }>();
+  for (const observation of observations) {
+    const existing = sessions.get(observation.sessionId);
+    if (!existing) sessions.set(observation.sessionId, { observation, count: 1, conflict: false });
+    else {
+      existing.count += 1;
+      existing.conflict ||= !sameObservation(existing.observation, observation);
+    }
+  }
+
+  const knownProject = typeof lesson.scope.projectId === 'string'
+    && /^project:[a-f0-9]{64}$/.test(lesson.scope.projectId);
+  for (const { observation: obs, count, conflict } of sessions.values()) {
+    // Count records excluded by deduplication, including every record of a
+    // conflicting group rather than pretending its first record was trusted.
+    duplicateObservations += conflict ? count : count - 1;
+    if (conflict) continue;
+    if (!obs.sessionId.trim() || !knownProject || obs.projectId !== lesson.scope.projectId
+      || !obs.agentCli || !KNOWN_PROVIDERS.has(obs.agentCli) || !lesson.scope.agentClis.includes(obs.agentCli)) {
+      excludedScope += 1;
+      continue;
+    }
+    const timestamp = obs.timestampMs;
+    const started = obs.startedAtMs;
+    if (timestamp === null || !Number.isFinite(timestamp) || timestamp > now.getTime()
+      || (started !== undefined && started !== null && (
+        !Number.isFinite(started) || started > timestamp || started > now.getTime()
+        || (started < appliedMs && timestamp >= appliedMs)
+      ))) {
+      // Includes absent, invalid, future and baseline-straddling clocks. An
+      // unusable clock must not silently become a clean post-rule session.
       excludedNoTimestamp += 1;
       continue;
     }
     const exhibits = obs.candidateKeys.has(lesson.candidateKey);
-    if (obs.timestampMs < appliedMs) {
+    if (timestamp < appliedMs) {
       preSessions += 1;
       if (exhibits) preExhibiting += 1;
     } else {
@@ -101,8 +144,18 @@ export function measureLesson(
     postRate,
     relativeReduction,
     excludedNoTimestamp,
+    excludedScope,
+    duplicateObservations,
     verdict,
   };
+}
+
+function sameObservation(a: SessionObservation, b: SessionObservation): boolean {
+  return a.projectId === b.projectId && a.agentCli === b.agentCli
+    && Object.is(a.timestampMs, b.timestampMs)
+    && Object.is(a.startedAtMs ?? null, b.startedAtMs ?? null)
+    && a.candidateKeys.size === b.candidateKeys.size
+    && [...a.candidateKeys].every((key) => b.candidateKeys.has(key));
 }
 
 function classify(
@@ -161,6 +214,9 @@ export function measureLessons(
       next.revisions.push({ at: nowIso, change: 'status:actuated->verified' });
       next.status = 'verified';
       verified += 1;
+    } else if (measurement.verdict !== 'improved' && next.status === 'verified') {
+      next.revisions.push({ at: nowIso, change: 'status:verified->actuated' });
+      next.status = 'actuated';
     }
     return next;
   });
@@ -170,9 +226,15 @@ export function measureLessons(
 
 export function formatMeasurement(m: Measurement): string {
   const pct = (r: number) => `${Math.round(r * 100)}%`;
+  const exclusions = [
+    m.excludedNoTimestamp > 0 ? `${m.excludedNoTimestamp} session(s) had unusable timing` : '',
+    (m.excludedScope ?? 0) > 0 ? `${m.excludedScope} session(s) outside known project/provider scope` : '',
+    (m.duplicateObservations ?? 0) > 0 ? `${m.duplicateObservations} duplicate/conflicting observation(s)` : '',
+  ].filter(Boolean);
+  const excluded = exclusions.length > 0 ? `; excluded: ${exclusions.join('; ')}` : '';
   if (m.verdict === 'insufficient-data') {
     return `measured: insufficient post-actuation data (${m.postSessions} session(s) since `
-      + `${m.appliedAt.slice(0, 10)}; need more to judge)`;
+      + `${m.appliedAt.slice(0, 10)}; need more to judge)${excluded}`;
   }
   // relativeReduction > 0 means the shape recurred LESS after actuation; < 0
   // means MORE. Spell out the direction rather than leaning on a sign that
@@ -182,9 +244,6 @@ export function formatMeasurement(m: Measurement): string {
     : m.relativeReduction >= 0
       ? ` (${Math.round(m.relativeReduction * 100)}% less often)`
       : ` (${Math.abs(Math.round(m.relativeReduction * 100))}% more often)`;
-  const excluded = m.excludedNoTimestamp > 0
-    ? ` · ${m.excludedNoTimestamp} session(s) had no clock, excluded`
-    : '';
   // The improved/verified path is the one most likely to be over-read as proof.
   // Surface the regression-to-mean caveat wherever the verdict renders, not just
   // in source comments — a common shape drops by reverting to its mean alone.

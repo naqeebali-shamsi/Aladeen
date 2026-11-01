@@ -36,6 +36,27 @@ describe('Scrubber', () => {
     expect(text).toBe('wrote ~\\projects\\foo.ts');
   });
 
+  it('does not scrub POSIX case variants or prefix-sibling paths into the same identity', () => {
+    const s = new Scrubber({ homeDir: '/home/Alice' });
+    expect(s.scrubPath('/home/Alice/repo')).toBe('~/repo');
+    expect(s.scrubPath('/home/alice/repo')).toBe('/home/alice/repo');
+    expect(s.scrubPath('/home/Alice-other/repo')).toBe('/home/Alice-other/repo');
+    expect(s.scrubPath('/home/Alice.bak/repo')).toBe('/home/Alice.bak/repo');
+    expect(s.scrubPath('/mnt/home/Alice/repo')).toBe('/mnt/home/Alice/repo');
+    expect(s.scrubMessage('open /home/Alice-other/repo, then /home/Alice/repo').text)
+      .toBe('open /home/Alice-other/repo, then ~/repo');
+  });
+
+  it('supports Windows home variants at a directory boundary', () => {
+    const s = new Scrubber({ homeDir: 'C:\\Users\\Alice' });
+    expect(s.scrubPath('c:/users/ALICE/repo')).toBe('~/repo');
+    expect(s.scrubPath('C:\\USERS\\alice\\repo')).toBe('~\\repo');
+    expect(s.scrubPath('C:/Users/Alice-other/repo')).toBe('C:/Users/Alice-other/repo');
+    expect(s.scrubMessage('home "C:/Users/Alice", project c:/users/alice/repo').text)
+      .toBe('home "~", project ~/repo');
+    expect(s.manifest().passes.find((pass) => pass.reason === 'path-home')?.version).toBe('2');
+  });
+
   it('truncates shell output past the cap and emits a marker', () => {
     const s = new Scrubber({ maxOutputChars: 50 });
     const big = 'x'.repeat(200);

@@ -79,7 +79,7 @@ The first slice of the learning layer turns the read-only drill-down into a **re
 
 Confidence is an honest tier — **known-fix** / **medium** / **low** / **none** — and every suggestion prints its denominators (how many failed sessions, how many resolved siblings). Most buckets are still small, so **none** ("no comparable resolved session in your history yet — read-only drill-down only") is the common, expected answer. Today the only live known-fix on a typical store is `worktree_collision`; the `lint_loop` rule is armed but only fires once a session is classified with an actual edit loop.
 
-**Aladeen suggests; it never runs the agent.** This is not orchestration: there is no auto-execution, no synthesized patch, and only change-shaped evidence is shown (file path, action, line counts — never file content). A human, or an MCP-connected agent, decides whether to act. See [Known limits](#known-limits) for what's explicitly out of scope.
+**Suggestions remain read-only; the CLI also includes an explicit repair experiment.** The CLI accepts `aladeen remedy <fingerprint> --apply` for registered dependency-installation remedies in a fresh worktree. This runs package-manager commands and may access the network or execute lifecycle scripts. Installation exit zero is not proof that the original error was fixed; the default cleanup discards the experimental worktree. The MCP suggestion tool does not execute repairs.
 
 ### Learning module
 
@@ -106,7 +106,7 @@ The pitch is deliberately small: **don't replace your agent, learn from it**. Th
 
 ## Design invariants
 
-- **Raw secrets and PII never persist.** All ingest paths pass through a versioned scrubber (`src/observability/scrubber.ts`). API keys, JWTs, AWS keys, GitHub PATs, and the user's home-directory path are redacted at the boundary. Inline `[REDACTED:reason]` markers stay greppable.
+- **Recognized secret patterns and home paths are redacted.** The scrubber is not a comprehensive PII filter. All ingest paths pass through a versioned scrubber (`src/observability/scrubber.ts`). API keys, JWTs, AWS keys, GitHub PATs, and the user's home-directory path are redacted at the boundary. Inline `[REDACTED:reason]` markers stay greppable.
 - **Every event has source provenance.** A `SessionTrace.events[i].source` field points back to the byte range in the original artifact. If a parser disagrees with you, you can reproduce the dispute.
 - **Adding a new agent CLI doesn't require schema changes.** Extend the `SourceKind` enum, write an ingester that targets `SessionTrace`, done. The Claude Code (JSONL) and opencode (SQLite) ingesters look completely different on the inside and produce identical `SessionTrace` output.
 - **Ordering uses `seq`, not timestamps.** Clocks lie and resumed sessions span days.
@@ -171,7 +171,7 @@ The blueprint engine that originally lived here (DAG runner, deterministic + age
 
 - Tool names not normalized across providers (`Write` vs `write`). Tool usage rollup treats them as distinct.
 - Most fingerprint buckets are still size 1 on small ingested datasets, so the learning layer's data-mined suggestions are usually tiered **low** or **none** rather than confident — bucket sizes grow with more sessions. The only high-confidence suggestion today is the rule-encoded **`worktree_collision`** known fix; the `lint_loop` rule is armed but not yet emitted by any ingester on real data.
-- **Auto-replay — Aladeen running the fix itself — is explicitly out of scope for v1.** Remedy suggestions are read-only: an ask, the tools/files a resolving session used, and a known-fix pointer where one exists. Acting on them is the human's or MCP-connected agent's decision. Letting Aladeen execute would make it the orchestrator the project deliberately stopped being.
+- **General autonomous repair is not implemented.** The CLI has opt-in dependency-installation experiments through `remedy --apply`; reproduction, verified postconditions, process isolation and durable repair delivery remain work items. Successful dependency installation is an experiment, not proof of a repaired failure.
 - Error classifier mostly defaults to `tool_error`. Heuristic patterns will be refined as more session data accumulates.
 - Wall-clock duration is preserved alongside active duration for reference; resumed-across-days sessions report sensible numbers via `activeDurationMs`.
 
@@ -187,3 +187,21 @@ The blueprint engine that originally lived here (DAG runner, deterministic + age
 ## License
 
 MIT. See `LICENSE`.
+
+
+### Autonomous lesson review (0.7.0)
+
+Version 0.7.0 reviews lessons before CLI writes to the managed guidance block. Preview decisions with `aladeen lessons --review` (or `aladeen lessons --review --json`). `aladeen learn --json` includes review decisions; learning saves the latest eligibility snapshot in `.aladeen/lessons/review.json`.
+
+The deterministic policy approves only supported built-in guidance with consistent, recent evidence. It holds inferred user preferences, unknown sources, stale evidence and measured regressions. Rejected or held rules are omitted from the next managed block; an empty selection withdraws the block. CLI `learn --apply` explicitly enables guidance writes. Background scheduling remains a separate development feature. Unchanged rules retain their first application timestamp for observational recurrence measurement.
+
+Review resolves evidence against regenerated detector results from stored traces. It does not authenticate those local source transcripts, prove causation, or detect semantic conflicts with owner instructions. The implementation plan and remaining mechanic work are in [the autonomous learning roadmap](https://github.com/naqeebali-shamsi/Aladeen/blob/v0.7.0/docs/plans/autonomous-learning.md).
+
+
+### Project-scoped evidence and measurement (0.7.0)
+
+Lessons now carry a project identity derived from a normalized working-directory path. The same failure shape in two projects creates separate lessons; evidence from unknown projects never becomes project-specific guidance automatically. Before application, Aladeen resolves supporting sessions and event coordinates against freshly regenerated detector output. The destination file's directory determines which project's lessons may be written, including when `--target` is used. File symlinks and directory aliases are refused; use the physical project path.
+
+Before/after recurrence measurements include only the same known project and observed providers. They exclude duplicate or conflicting session observations, invalid or future clocks, and sessions known to cross the application boundary. A previously verified lesson loses that status when current scoped measurements no longer support improvement. Measurements remain observational.
+
+Legacy lessons remain readable but have unknown project scope and are held. Rerunning learning over usable stored traces creates separate scoped lessons; it does not retroactively relabel old lessons. Claude sessions require actual, consistent transcript cwd metadata, so older ingested Claude logs need reingestion. OpenClaw currently identifies an agent storage directory rather than a project and remains unknown for automatic guidance. Home-scrubbed paths require the current path scrubber version; reingest older traces before using them as project evidence. Project IDs are local lexical identities: aliases, symlinks, worktrees and subdirectories are not assumed to be the same project.

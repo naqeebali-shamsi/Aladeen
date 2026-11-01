@@ -60,13 +60,16 @@ export function consolidate(
 
   // Never mutate the caller's lessons — consolidate returns a new set.
   const byKey = new Map<string, Lesson>();
-  for (const lesson of existing) byKey.set(lesson.candidateKey, structuredClone(lesson));
+  for (const lesson of existing) {
+    byKey.set(partitionKey(lesson.candidateKey, lesson.scope.projectId), structuredClone(lesson));
+  }
 
   const grouped = new Map<string, LessonCandidate[]>();
   for (const c of candidates) {
-    const group = grouped.get(c.candidateKey);
+    const key = partitionKey(c.candidateKey, c.projectId);
+    const group = grouped.get(key);
     if (group) group.push(c);
-    else grouped.set(c.candidateKey, [c]);
+    else grouped.set(key, [c]);
   }
 
   const result: ConsolidateResult = {
@@ -82,7 +85,7 @@ export function consolidate(
   for (const [key, group] of grouped) {
     const lesson = byKey.get(key);
     if (!lesson) {
-      byKey.set(key, createLesson(key, group, nowIso));
+      byKey.set(key, createLesson(group[0].candidateKey, group, nowIso));
       result.created += 1;
       continue;
     }
@@ -128,16 +131,27 @@ export function consolidate(
   return result;
 }
 
+// A shape may recur across repositories, but that is not corroboration inside
+// either repository. The join key includes identity while candidateKey remains
+// the detector shape consumed by review and measurement. A tagged tuple keeps
+// legacy keys distinct even if their text resembles a project-prefixed key.
+function partitionKey(candidateKey: string, projectId: string | undefined): string {
+  return JSON.stringify([projectId ?? null, candidateKey]);
+}
+
 function createLesson(key: string, group: LessonCandidate[], nowIso: string): Lesson {
   const first = group[0];
   const fresh: Lesson = {
     schemaVersion: '1',
-    id: lessonIdFor(key),
+    id: lessonIdFor(first.projectId ? `${first.projectId}|${key}` : key),
     candidateKey: key,
     dims: first.dims,
     statement: first.statement,
     category: first.category,
-    scope: { agentClis: [], universal: false },
+    scope: {
+      ...(first.projectId ? { projectId: first.projectId } : {}),
+      agentClis: [], universal: false,
+    },
     status: 'hypothesis',
     evidence: [],
     seenSessionIds: [],

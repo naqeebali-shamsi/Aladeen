@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { consolidate } from './consolidate.js';
-import { lessonIdFor, type Lesson } from './lesson.js';
+import { LessonSchema, lessonIdFor, type Lesson } from './lesson.js';
 import type { LessonCandidate } from './detectors.js';
 
 const NOW = new Date('2026-06-12T12:00:00.000Z');
@@ -8,6 +8,7 @@ const EARLIER = new Date('2026-06-10T12:00:00.000Z');
 
 function candidate(opts: {
   sessionId: string;
+  projectId?: string;
   key?: string;
   agentCli?: string;
   observedAt?: string;
@@ -19,6 +20,7 @@ function candidate(opts: {
     detectorId: 'repeated-tool-failure',
     detectorVersion: '1',
     sessionId: opts.sessionId,
+    projectId: opts.projectId,
     candidateKey: opts.key ?? 'repeated-tool-failure|Bash|timeout',
     dims: { toolName: 'Bash', errorClass: 'timeout' },
     statement: 'Bash calls fail repeatedly with timeout.',
@@ -194,5 +196,105 @@ describe('consolidate — bounds', () => {
       { now: NOW },
     );
     expect(r.lessons[0].targetFingerprints).toEqual(['fp-a', 'fp-b']);
+  });
+});
+
+
+const PROJECT_A = 'project:' + 'a'.repeat(64);
+const PROJECT_B = 'project:' + 'b'.repeat(64);
+const SHAPE = 'repeated-tool-failure|Bash|timeout';
+
+describe('consolidate project boundaries', () => {
+  it('does not corroborate a shape using one session from each of two projects', () => {
+    const result = consolidate([], [
+      candidate({ sessionId: 'a1', projectId: PROJECT_A }),
+      candidate({ sessionId: 'b1', projectId: PROJECT_B }),
+    ], { now: NOW });
+    expect(result.created).toBe(2);
+    expect(result.lessons).toHaveLength(2);
+    expect(result.lessons.every((lesson) => lesson.status === 'hypothesis')).toBe(true);
+    expect(result.lessons.map((lesson) => lesson.scope.projectId)).toEqual([PROJECT_A, PROJECT_B]);
+    expect(result.lessons.map((lesson) => lesson.id)).toEqual([
+      lessonIdFor(`${PROJECT_A}|${SHAPE}`), lessonIdFor(`${PROJECT_B}|${SHAPE}`),
+    ]);
+    expect(result.lessons.every((lesson) => lesson.candidateKey === SHAPE)).toBe(true);
+  });
+
+  it('reinforces and deduplicates only inside the matching project', () => {
+    const first = consolidate([], [
+      candidate({ sessionId: 'a1', projectId: PROJECT_A, agentCli: 'codex' }),
+      candidate({ sessionId: 'b1', projectId: PROJECT_B, agentCli: 'claude-code' }),
+    ], { now: EARLIER });
+    const second = consolidate(first.lessons, [
+      candidate({ sessionId: 'a1', projectId: PROJECT_A, agentCli: 'codex' }),
+      candidate({ sessionId: 'a2', projectId: PROJECT_A, agentCli: 'opencode' }),
+      candidate({ sessionId: 'a2', projectId: PROJECT_A, agentCli: 'opencode' }),
+    ], { now: NOW });
+    const a = second.lessons.find((lesson) => lesson.scope.projectId === PROJECT_A)!;
+    const b = second.lessons.find((lesson) => lesson.scope.projectId === PROJECT_B)!;
+    expect(second.created).toBe(0);
+    expect(second.reinforced).toBe(1);
+    expect(a.status).toBe('corroborated');
+    expect(a.seenSessionIds).toEqual(['a1', 'a2']);
+    expect(a.scope.agentClis).toEqual(['codex', 'opencode']);
+    expect(b.status).toBe('hypothesis');
+    expect(b.seenSessionIds).toEqual(['b1']);
+    expect(b.scope.agentClis).toEqual(['claude-code']);
+    const repeated = consolidate(second.lessons, [
+      candidate({ sessionId: 'a2', projectId: PROJECT_A, agentCli: 'opencode' }),
+    ], { now: NOW });
+    expect(repeated.reinforced).toBe(0);
+    expect(repeated.lessons.map((lesson) => lesson.id)).toEqual(second.lessons.map((lesson) => lesson.id));
+  });
+
+  it('preserves unknown legacy lessons without attributing them to a new scoped session', () => {
+    const legacy = consolidate([], [candidate({ sessionId: 's1' })], { now: EARLIER }).lessons[0];
+    const snapshot = structuredClone(legacy);
+    const result = consolidate([legacy], [
+      candidate({ sessionId: 's2', projectId: PROJECT_A }),
+      candidate({ sessionId: 's3' }),
+    ], { now: NOW });
+    expect(result.lessons).toHaveLength(2);
+    const unknown = result.lessons.find((lesson) => !lesson.scope.projectId)!;
+    const known = result.lessons.find((lesson) => lesson.scope.projectId === PROJECT_A)!;
+    expect(unknown.id).toBe(lessonIdFor(SHAPE));
+    expect(unknown.seenSessionIds).toEqual(['s1', 's3']);
+    expect(known.status).toBe('hypothesis');
+    expect(known.seenSessionIds).toEqual(['s2']);
+    expect(legacy).toEqual(snapshot);
+    expect(LessonSchema.safeParse(unknown).success).toBe(true);
+    expect(LessonSchema.safeParse(known).success).toBe(true);
+  });
+
+  it('does not share distinct-session support even when session IDs match across project partitions', () => {
+    const result = consolidate([], [
+      candidate({ sessionId: 'same-id', projectId: PROJECT_A }),
+      candidate({ sessionId: 'same-id', projectId: PROJECT_B }),
+      candidate({ sessionId: 'same-id' }),
+    ], { now: NOW });
+    expect(result.lessons).toHaveLength(3);
+    expect(new Set(result.lessons.map((lesson) => lesson.id)).size).toBe(3);
+    expect(result.lessons.every((lesson) => lesson.recurrence.sessionCount === 1)).toBe(true);
+  });
+
+  it('schema preserves legacy records and validates scoped identities and optional measurement counters', () => {
+    const lesson = consolidate([], [candidate({ sessionId: 's1', projectId: PROJECT_A })], { now: NOW }).lessons[0];
+    expect(LessonSchema.parse(lesson).scope.projectId).toBe(PROJECT_A);
+    lesson.scope.projectId = 'not-a-project';
+    expect(LessonSchema.safeParse(lesson).success).toBe(false);
+    delete lesson.scope.projectId;
+    expect(LessonSchema.safeParse(lesson).success).toBe(true);
+    lesson.measurement = {
+      computedAt: NOW.toISOString(), appliedAt: NOW.toISOString(),
+      preSessions: 1, preExhibiting: 1, preRate: 1,
+      postSessions: 0, postExhibiting: 0, postRate: 0,
+      excludedNoTimestamp: 0, verdict: 'insufficient-data',
+    };
+    expect(LessonSchema.safeParse(lesson).success).toBe(true);
+    lesson.measurement.excludedScope = 3;
+    lesson.measurement.duplicateObservations = 2;
+    expect(LessonSchema.parse(lesson).measurement).toMatchObject({ excludedScope: 3, duplicateObservations: 2 });
+    lesson.measurement.excludedScope = -1;
+    expect(LessonSchema.safeParse(lesson).success).toBe(false);
   });
 });

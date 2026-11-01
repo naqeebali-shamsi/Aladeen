@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ReviewDecision } from './review.js';
 import { LessonSchema, type Lesson } from './lesson.js';
 import { sanitizeForFs } from '../observability/storage.js';
 
@@ -30,6 +31,12 @@ export class LessonStore {
     const filePath = path.join(this.lessonsDir, `${sanitizeForFs(lesson.id)}.lesson.json`);
     await writeFile(filePath, JSON.stringify(lesson, null, 2), 'utf-8');
     return filePath;
+  }
+
+  // Latest deterministic decision snapshot. Contains IDs/reasons, never raw excerpts.
+  async writeReview(decisions: ReviewDecision[]): Promise<void> {
+    await this.ensureDirs();
+    await writeFile(path.join(this.lessonsDir, 'review.json'), JSON.stringify(decisions, null, 2), 'utf-8');
   }
 
   async writeAll(lessons: Lesson[]): Promise<void> {

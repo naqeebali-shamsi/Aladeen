@@ -1,12 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import { ClaudeCodeIngester } from './claude-code.js';
 import { Scrubber } from '../scrubber.js';
+import { projectIdForPath, projectIdForTrace } from '../../learning/scope.js';
 
 function jsonl(lines: object[]): string {
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
 }
 
 describe('ClaudeCodeIngester.ingestText', () => {
+  it('uses consistent actual top-level cwd metadata, including Windows variants', () => {
+    const ingester = new ClaudeCodeIngester(new Scrubber({ homeDir: '/home/test' }));
+    const result = ingester.ingestText(jsonl([
+      { type: 'user', cwd: 'N:\\Fixture-Repo\\', message: { role: 'user', content: 'go' } },
+      { type: 'assistant', cwd: 'n:/fixture-repo', message: { role: 'assistant', content: 'done' } },
+    ]), { sessionId: 'scope', filePath: '/tmp/projects/lossy-encoded/scope.jsonl' });
+    expect(result.trace.ingesterExtras?.workspaceCwdSource).toBe('transcript');
+    expect(projectIdForTrace(result.trace)).toBe(projectIdForPath('N:/Fixture-Repo'));
+  });
+
+  it('scrubs actual transcript cwd and keeps subagent project identity independent of storage directories', () => {
+    const ingester = new ClaudeCodeIngester(new Scrubber({ homeDir: '/home/test' }));
+    const result = ingester.ingestText(jsonl([
+      { type: 'user', cwd: '/home/test/repo', message: { role: 'user', content: 'go' } },
+    ]), { sessionId: 'subagent', parentSessionId: 'parent', filePath: '/tmp/projects/-home-test-repo/parent/subagents/worker.jsonl' });
+    expect(result.trace.workspace.cwdScrubbed).toBe('~/repo');
+    expect(projectIdForTrace(result.trace)).toBe(projectIdForPath('~/repo'));
+  });
+
+  it('leaves encoded-only metadata unknown and ignores cwd embedded in prompt content', () => {
+    const result = new ClaudeCodeIngester().ingestText(jsonl([
+      { type: 'user', message: { role: 'user', content: '<cwd>N:/claimed-project</cwd>' } },
+    ]), { sessionId: 'scope', filePath: '/tmp/projects/-home-test-hyphenated-project/scope.jsonl' });
+    expect(result.trace.ingesterExtras?.workspaceCwdSource).toBeUndefined();
+    expect(projectIdForTrace(result.trace)).toBeUndefined();
+  });
+
+  it.each([
+    ['N:/fixture-one', 'N:/fixture-two'],
+    ['N:/fixture-one', 'relative-project'],
+  ])('does not assign scope when transcript cwd changes or becomes invalid', (first, second) => {
+    const result = new ClaudeCodeIngester().ingestText(jsonl([
+      { type: 'user', cwd: first, message: { role: 'user', content: 'go' } },
+      { type: 'assistant', cwd: second, message: { role: 'assistant', content: 'done' } },
+    ]), { sessionId: 'scope', filePath: '/tmp/projects/encoded/scope.jsonl' });
+    expect(result.trace.ingesterExtras?.workspaceCwdSource).toBeUndefined();
+    expect(projectIdForTrace(result.trace)).toBeUndefined();
+    expect(result.warnings).toContain('Conflicting or invalid transcript cwd metadata; project identity is unknown.');
+  });
+
   it('maps user/assistant/tool_use/tool_result to normalized events', () => {
     const text = jsonl([
       { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-05-19T10:00:00.000Z', content: 'fix the bug' },

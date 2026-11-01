@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -23,8 +24,10 @@ import { applyRemedy, defaultApplyDeps } from './observability/apply.js';
 import { suggestLoops } from './observability/loops.js';
 import { runIngestPipeline } from './observability/ingest-runner.js';
 import { runLearn, formatLearnSummary, formatLessons, rankLessons } from './learning/learn.js';
+import { reviewLessons } from './learning/review.js';
+import { loadReviewContext } from './learning/evidence.js';
 import { LessonStore } from './learning/store.js';
-import { applyLearnedBlock, markActuated } from './learning/actuate.js';
+import { applyLearnedBlock, markActuated, markWithdrawn } from './learning/actuate.js';
 import { exportLessonsMarkdown } from './learning/export-md.js';
 
 // The interactive TUI and blueprint runner pull in Ink/React and the optional
@@ -49,7 +52,7 @@ const program = new Command();
 
 program
   .name('aladeen')
-  .version('0.3.0')
+  .version((createRequire(import.meta.url)('../package.json') as { version: string }).version)
   .description('Observability + learning layer for agent CLIs. Ingest session logs, surface failure patterns, replay known-good blueprints, mine lessons, measure whether guardrails work.');
 
 program
@@ -505,34 +508,40 @@ program
     const result = await runLearn(storage, store);
 
     if (result.summary.sessionsScanned === 0) {
-      console.error('No ingested sessions found. Run `aladeen ingest <source>` first.');
-      process.exit(1);
+      console.error('No ingested sessions found. Reviewing stored lessons only; ingest sessions to learn new patterns.');
     }
 
+    const reviewedAt = new Date();
+    const reviewTarget = opts.target ? path.dirname(path.resolve(opts.target)) : opts.repoRoot;
+    const reviewContext = await loadReviewContext(storage, reviewTarget);
+    const review = reviewLessons(result.lessons, reviewedAt, reviewContext);
+    await store.writeReview(review);
     let applied: { filePath: string; written: boolean; lessonCount: number } | undefined;
     if (opts.apply) {
-      const now = new Date();
+      const now = reviewedAt;
       const target = opts.target
         ?? path.join(opts.repoRoot, opts.claudeMd ? 'CLAUDE.md' : 'AGENTS.md');
-      const applyResult = await applyLearnedBlock(target, result.lessons, now);
+      const applyResult = await applyLearnedBlock(target, result.lessons, now, undefined, reviewContext);
       applied = { filePath: applyResult.filePath, written: applyResult.written, lessonCount: applyResult.lessonCount };
       if (applyResult.written) {
+        markWithdrawn(result.lessons, applyResult.selected, target, opts.claudeMd ? 'claude-md' : 'agents-md', now);
         markActuated(applyResult.selected, target, opts.claudeMd ? 'claude-md' : 'agents-md', now);
-        await store.writeAll(applyResult.selected);
+        await store.writeAll(result.lessons);
       }
     }
 
     if (opts.json) {
-      console.log(JSON.stringify({ summary: result.summary, applied }, null, 2));
+      console.log(JSON.stringify({ summary: result.summary, review, applied }, null, 2));
       return;
     }
 
     console.log(formatLearnSummary(result.summary));
+    console.log(`Review: ${review.filter((d) => d.verdict === 'approve').length} approved, ${review.filter((d) => d.verdict === 'hold').length} held, ${review.filter((d) => d.verdict === 'reject').length} rejected. Use aladeen lessons --review for reasons.`);
     if (applied) {
       console.log('');
       console.log(applied.written
         ? `Wrote ${applied.lessonCount} lesson(s) into ${applied.filePath} (fenced block — re-run \`learn --apply\` to refresh).`
-        : 'Nothing to apply yet: actuation needs corroborated lessons (>=2 distinct sessions).');
+        : 'Managed block already matches the reviewed selection; no write needed.');
     }
   });
 
@@ -541,12 +550,20 @@ program
   .description('List learned lessons ranked by decay-weighted retention')
   .option('--repo-root <path>', 'Repository root', process.cwd())
   .option('--all', 'Include retired lessons')
+  .option('--review', 'Preview deterministic actuation decisions without changing guidance')
   .option('--json', 'Print raw lesson JSON')
   .option('--export-md <dir>', 'Export lessons as semantic Markdown notes (Obsidian/basic-memory-compatible)')
-  .action(async (opts: { repoRoot: string; all?: boolean; json?: boolean; exportMd?: string }) => {
+  .action(async (opts: { repoRoot: string; all?: boolean; review?: boolean; json?: boolean; exportMd?: string }) => {
     const store = new LessonStore(opts.repoRoot);
     const lessons = await store.list();
 
+    if (opts.review) {
+      const context = await loadReviewContext(new IngestStorage(opts.repoRoot), opts.repoRoot);
+      const decisions = reviewLessons(lessons, new Date(), context);
+      console.log(opts.json ? JSON.stringify(decisions, null, 2)
+        : decisions.map((d) => `${d.lessonId} ${d.verdict}: ${d.reasons.join(', ')}`).join('\n') || 'No lessons to review.');
+      return;
+    }
     if (opts.exportMd) {
       const count = await exportLessonsMarkdown(lessons, opts.exportMd);
       console.log(count === 0

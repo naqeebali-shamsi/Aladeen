@@ -11,6 +11,8 @@ const NOW = new Date('2026-06-12T12:00:00.000Z');
 const APPLIED = '2026-04-01T00:00:00.000Z';
 const APPLIED_MS = Date.parse(APPLIED);
 const KEY = 'repeated-tool-failure|Bash|timeout';
+const PROJECT = 'project:' + 'a'.repeat(64);
+const OTHER_PROJECT = 'project:' + 'b'.repeat(64);
 
 let n = 0;
 function lesson(opts: { status?: LessonStatus; actuated?: boolean } = {}): Lesson {
@@ -22,7 +24,7 @@ function lesson(opts: { status?: LessonStatus; actuated?: boolean } = {}): Lesso
     dims: { toolName: 'Bash', errorClass: 'timeout' },
     statement: 'Bash fails repeatedly with timeout.',
     category: 'model-mistake',
-    scope: { agentClis: ['claude-code'], universal: false },
+    scope: { agentClis: ['claude-code'], universal: false, projectId: PROJECT },
     status: opts.status ?? 'actuated',
     evidence: [{ sessionId: 's1', seq: 0 }],
     seenSessionIds: ['s1'],
@@ -38,6 +40,8 @@ function lesson(opts: { status?: LessonStatus; actuated?: boolean } = {}): Lesso
 function obs(id: string, daysFromApplied: number, exhibits: boolean): SessionObservation {
   return {
     sessionId: id,
+    projectId: PROJECT,
+    agentCli: 'claude-code',
     timestampMs: APPLIED_MS + daysFromApplied * 86_400_000,
     candidateKeys: exhibits ? new Set([KEY]) : new Set(),
   };
@@ -114,7 +118,7 @@ describe('measureLesson', () => {
     const observations: SessionObservation[] = [
       ...window('pre', 10, 8, 'pre'),
       ...window('post', 6, 0, 'post'),
-      { sessionId: 'noclock', timestampMs: null, candidateKeys: new Set([KEY]) },
+      { sessionId: 'noclock', projectId: PROJECT, agentCli: 'claude-code', timestampMs: null, candidateKeys: new Set([KEY]) },
     ];
     const m = measureLesson(lesson(), observations, NOW)!;
     expect(m.excludedNoTimestamp).toBe(1);
@@ -124,7 +128,7 @@ describe('measureLesson', () => {
   it('handles a session exactly at appliedAt as post-actuation', () => {
     const observations: SessionObservation[] = [
       ...window('pre', 10, 8, 'pre'),
-      { sessionId: 'boundary', timestampMs: APPLIED_MS, candidateKeys: new Set([KEY]) },
+      { sessionId: 'boundary', projectId: PROJECT, agentCli: 'claude-code', timestampMs: APPLIED_MS, candidateKeys: new Set([KEY]) },
       ...window('post', 5, 0, 'post'),
     ];
     const m = measureLesson(lesson(), observations, NOW)!;
@@ -200,5 +204,139 @@ describe('formatMeasurement', () => {
   it('spells regression as "more often" rather than a bare sign', () => {
     const m = measureLesson(lesson(), [...window('pre', 20, 6, 'pre'), ...window('post', 10, 9, 'post')], NOW)!;
     expect(formatMeasurement(m)).toContain('more often');
+  });
+});
+
+
+describe('scoped recurrence boundaries', () => {
+  it('does not let clean sessions from another project improve a rule', () => {
+    const observations = [
+      ...window('pre', 10, 8, 'pre'),
+      ...window('post', 2, 2, 'post'),
+      ...window('foreign', 50, 0, 'post').map((o) => ({ ...o, projectId: OTHER_PROJECT })),
+    ];
+    const m = measureLesson(lesson(), observations, NOW)!;
+    expect(m.verdict).toBe('insufficient-data');
+    expect(m.postSessions).toBe(2);
+    expect(m.excludedScope).toBe(50);
+  });
+
+  it('only measures supported providers even when marked universal', () => {
+    const input = lesson();
+    input.scope.universal = true;
+    input.scope.agentClis = ['claude-code', 'codex'];
+    const observations = [
+      ...window('pre', 10, 8, 'pre'),
+      ...window('post', 2, 0, 'post').map((o) => ({ ...o, agentCli: 'codex' })),
+      ...window('foreign', 20, 0, 'post').map((o) => ({ ...o, agentCli: 'openclaw' })),
+    ];
+    const m = measureLesson(input, observations, NOW)!;
+    expect(m.postSessions).toBe(2);
+    expect(m.verdict).toBe('insufficient-data');
+    expect(m.excludedScope).toBe(20);
+  });
+
+  it('excludes observations with unknown project or provider identity', () => {
+    const unknown = [
+      { ...obs('unknown-project', 1, false), projectId: undefined },
+      { ...obs('unknown-provider', 2, false), agentCli: undefined },
+      { ...obs('empty-project', 3, false), projectId: '' },
+    ];
+    const m = measureLesson(lesson(), [...window('pre', 10, 8, 'pre'), ...unknown], NOW)!;
+    expect(m.postSessions).toBe(0);
+    expect(m.excludedScope).toBe(3);
+    expect(m.verdict).toBe('insufficient-data');
+  });
+
+  it('unknown provider labels cannot become measurement authority', () => {
+    const input = lesson();
+    input.scope.agentClis = ['unknown-provider'];
+    const observations = window('post', 10, 0, 'post').map((o) => ({ ...o, agentCli: 'unknown-provider' }));
+    const m = measureLesson(input, observations, NOW)!;
+    expect(m.postSessions).toBe(0);
+    expect(m.excludedScope).toBe(10);
+    expect(m.verdict).toBe('insufficient-data');
+  });
+
+  it('legacy unscoped lessons cannot become verified from scoped sessions', () => {
+    const input = lesson({ status: 'actuated' });
+    delete input.scope.projectId;
+    const r = measureLessons([input], [...window('pre', 10, 8, 'pre'), ...window('post', 10, 0, 'post')], NOW);
+    expect(r.verified).toBe(0);
+    expect(r.lessons[0].measurement).toMatchObject({ verdict: 'insufficient-data', excludedScope: 20 });
+    expect(r.lessons[0].status).toBe('actuated');
+  });
+
+  it('identical duplicates cannot inflate the post-session floor', () => {
+    const one = obs('same', 1, false);
+    const observations = [...window('pre', 10, 8, 'pre'), ...Array.from({ length: 8 }, () => structuredClone(one))];
+    const m = measureLesson(lesson(), observations, NOW)!;
+    expect(m.postSessions).toBe(1);
+    expect(m.duplicateObservations).toBe(7);
+    expect(m.verdict).toBe('insufficient-data');
+  });
+
+  it('conflicting copies exclude the whole session regardless of input order', () => {
+    const first = obs('conflict', 1, false);
+    const second = obs('conflict', 1, true);
+    const baseline = [...window('pre', 10, 8, 'pre'), ...window('post', 4, 0, 'post')];
+    const a = measureLesson(lesson(), [...baseline, first, second], NOW)!;
+    const b = measureLesson(lesson(), [...baseline, second, first], NOW)!;
+    expect(a).toEqual(b);
+    expect(a.postSessions).toBe(4);
+    expect(a.duplicateObservations).toBe(2);
+    expect(a.verdict).toBe('insufficient-data');
+  });
+
+  it('scope differences in duplicate IDs cannot select a favorable version', () => {
+    const first = obs('conflict', 1, false);
+    const second = { ...first, projectId: OTHER_PROJECT };
+    const m = measureLesson(lesson(), [first, second], NOW)!;
+    expect(m.postSessions).toBe(0);
+    expect(m.duplicateObservations).toBe(2);
+  });
+
+  it('invalid, future, reversed and baseline-straddling clocks do not enter windows', () => {
+    const invalid: SessionObservation[] = [
+      { ...obs('nan', 1, false), timestampMs: Number.NaN },
+      { ...obs('infinity', 1, false), timestampMs: Number.POSITIVE_INFINITY },
+      { ...obs('future', 1, false), timestampMs: NOW.getTime() + 1 },
+      { ...obs('reverse', 1, false), startedAtMs: APPLIED_MS + 2 * 86_400_000 },
+      { ...obs('spans', 1, false), startedAtMs: APPLIED_MS - 1 },
+      { ...obs('invalid-start', 1, false), startedAtMs: Number.NaN },
+    ];
+    const m = measureLesson(lesson(), [...window('pre', 10, 8, 'pre'), ...invalid], NOW)!;
+    expect(m.postSessions).toBe(0);
+    expect(m.excludedNoTimestamp).toBe(6);
+    expect(m.verdict).toBe('insufficient-data');
+  });
+
+  it.each(['regressed', 'unchanged', 'insufficient-data'] as const)('withdraws verified status when current evidence is %s', (verdict) => {
+    const post = verdict === 'regressed' ? window('post', 10, 10, 'post')
+      : verdict === 'unchanged' ? window('post', 10, 8, 'post') : window('post', 2, 0, 'post');
+    const r = measureLessons([lesson({ status: 'verified' })], [...window('pre', 10, 8, 'pre'), ...post], NOW);
+    expect(r.lessons[0].measurement?.verdict).toBe(verdict);
+    expect(r.lessons[0].status).toBe('actuated');
+    expect(r.lessons[0].revisions.at(-1)?.change).toBe('status:verified->actuated');
+    expect(r.verified).toBe(0);
+  });
+
+  it('preserves negative evidence for a withdrawn rule', () => {
+    const observations = [...window('pre', 10, 2, 'pre'), ...window('post', 10, 10, 'post')];
+    const input = lesson({ status: 'corroborated', actuated: false });
+    input.measurement = measureLesson(lesson(), observations, NOW)!;
+    const snapshot = structuredClone(input);
+    const r = measureLessons([input], [], NOW);
+    expect(r.measured).toBe(0);
+    expect(r.lessons[0]).toEqual(snapshot);
+    expect(r.lessons[0].measurement?.verdict).toBe('regressed');
+  });
+
+  it('renders scope and duplicate exclusions even when evidence is insufficient', () => {
+    const single = obs('same', 1, false);
+    const observations = [single, structuredClone(single), { ...obs('foreign', 2, false), projectId: OTHER_PROJECT }];
+    const m = measureLesson(lesson(), observations, NOW)!;
+    expect(formatMeasurement(m)).toContain('1 session(s) outside known project/provider scope');
+    expect(formatMeasurement(m)).toContain('1 duplicate/conflicting observation(s)');
   });
 });

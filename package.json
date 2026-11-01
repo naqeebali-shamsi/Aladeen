@@ -1,6 +1,6 @@
 {
   "name": "aladeen",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Observability + learning layer for agent CLIs (Claude Code, opencode, Codex, OpenClaw). Ingests session logs, classifies failures, mines recurring lessons, ranks them by a forgetting curve, writes the top corroborated guardrails into AGENTS.md, and measures whether they cut recurrence.",
   "type": "module",
   "main": "dist/index.js",
@@ -12,7 +12,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "ROADMAP.md"
+    "ROADMAP.md",
+    "docs/releases/0.7.0.md"
   ],
   "engines": {
     "node": ">=20"
@@ -57,7 +58,7 @@
     "cross-spawn": "^7.0.6",
     "ink": "^6.8.0",
     "react": "^19.2.4",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "optionalDependencies": {
     "node-pty": "^1.1.0"

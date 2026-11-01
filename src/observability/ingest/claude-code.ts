@@ -12,6 +12,7 @@ import { parseJsonl } from './_shared/jsonl.js';
 import { inferOutcome } from './_shared/outcome.js';
 import { classifyError } from './_shared/classify-error.js';
 import { classifyUserMessageOrigin } from './_shared/classify-origin.js';
+import { projectIdForPath } from '../../learning/scope.js';
 
 // Ingester for Claude Code .jsonl session files. The on-disk layout under
 // ~/.claude/projects/<encoded-cwd>/ is:
@@ -149,6 +150,8 @@ export class ClaudeCodeIngester {
     const nextSeq = () => seq++;
 
     const projectDirName = path.basename(path.dirname(source.filePath));
+    const transcriptCwds = new Map<string, string>();
+    let invalidTranscriptCwd = false;
 
     events.push({
       kind: 'session_start',
@@ -157,6 +160,14 @@ export class ClaudeCodeIngester {
     });
 
     for (const { raw, lineNumber } of lines) {
+      // Read source metadata only. Prompt content and tool arguments can name
+      // arbitrary paths and must never establish a session's project scope.
+      if (Object.hasOwn(raw, 'cwd')) {
+        const cwd = raw['cwd'];
+        const id = typeof cwd === 'string' ? projectIdForPath(cwd) : undefined;
+        if (id && typeof cwd === 'string') transcriptCwds.set(id, cwd);
+        else invalidTranscriptCwd = true;
+      }
       const type = typeof raw['type'] === 'string' ? (raw['type'] as string) : 'unknown';
       const ts = typeof raw['timestamp'] === 'string' ? (raw['timestamp'] as string) : undefined;
       if (ts) {
@@ -356,13 +367,19 @@ export class ClaudeCodeIngester {
       mtime: opts.mtime,
     });
 
+    const transcriptCwd = !invalidTranscriptCwd && transcriptCwds.size === 1
+      ? transcriptCwds.values().next().value
+      : undefined;
+    if (transcriptCwds.size > 1 || invalidTranscriptCwd) {
+      warnings.push('Conflicting or invalid transcript cwd metadata; project identity is unknown.');
+    }
     const trace: SessionTrace = {
       schemaVersion: '1',
       sessionId: source.sessionId,
       parentSessionId: source.parentSessionId,
       agentCli: { name: 'claude-code' },
       workspace: {
-        cwdScrubbed: this.scrubber.scrubPath(decodeProjectDirName(projectDirName)),
+        cwdScrubbed: this.scrubber.scrubPath(transcriptCwd ?? decodeProjectDirName(projectDirName)),
         gitRepoNameHash: createHash('sha256').update(projectDirName).digest('hex').slice(0, 16),
         gitBranch: null,
       },
@@ -377,8 +394,9 @@ export class ClaudeCodeIngester {
         cacheCreationTokens: cost.cacheCreationTokens || undefined,
       } : undefined,
       scrubbing: this.scrubber.manifest(),
-      ingesterExtras: Object.keys(skippedTypes).length > 0
-        ? { skippedTypes }
+      ingesterExtras: Object.keys(skippedTypes).length > 0 || transcriptCwd
+        ? { ...(Object.keys(skippedTypes).length > 0 ? { skippedTypes } : {}),
+          ...(transcriptCwd ? { workspaceCwdSource: 'transcript' } : {}) }
         : undefined,
     };
 
@@ -459,4 +477,3 @@ function decodeProjectDirName(encoded: string): string {
   }
   return encoded;
 }
-

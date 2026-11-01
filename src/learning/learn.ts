@@ -1,6 +1,8 @@
+import { computeDigest } from '../observability/digest.js';
+import { projectIdForTrace } from './scope.js';
 import type { IngestStorage } from '../observability/storage.js';
-import type { Lesson } from './lesson.js';
 import type { DecayParams } from './decay.js';
+import type { Lesson } from './lesson.js';
 import { runDetectors, type LessonCandidate } from './detectors.js';
 import { consolidate } from './consolidate.js';
 import { LessonStore } from './store.js';
@@ -61,14 +63,17 @@ export async function runLearn(
 
   for (const digest of digests) {
     const trace = await storage.loadTrace(digest.sessionId);
-    if (!trace) {
+    if (!trace || trace.sessionId !== digest.sessionId) {
       tracesMissing += 1;
       continue;
     }
-    const sessionCandidates = runDetectors({ trace, digest });
+    const sessionCandidates = runDetectors({ trace, digest: computeDigest(trace) });
     candidates.push(...sessionCandidates);
     observations.push({
       sessionId: trace.sessionId,
+      projectId: projectIdForTrace(trace),
+      agentCli: trace.agentCli.name,
+      startedAtMs: parseTimestamp(trace.startedAt),
       timestampMs: parseTimestamp(trace.endedAt ?? trace.startedAt),
       candidateKeys: new Set(sessionCandidates.map((c) => c.candidateKey)),
     });
@@ -169,6 +174,7 @@ function formatLessonLine(l: Lesson): string {
     `  ${retentionBar(l.decay.retention)} ${l.decay.retention.toFixed(2)}  ${l.status.toUpperCase()}  [${l.category}]  ${scope}`,
     `      ${l.statement}`,
     `      ${meta}`,
+    `      project ${l.scope.projectId ?? 'unknown (held from automatic guidance)'}`,
   ];
   if (l.measurement) lines.push(`      ${formatMeasurement(l.measurement)}`);
   lines.push('');

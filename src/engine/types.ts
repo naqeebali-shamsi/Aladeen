@@ -18,7 +18,7 @@ export interface NodeResult {
 
 export const NodeResultSchema = z.object({
   outcome: z.enum(['success', 'failure', 'retry']),
-  output: z.record(z.unknown()),
+  output: z.record(z.string(), z.unknown()),
   summary: z.string().optional(),
   error: z.string().optional(),
   durationMs: z.number(),
@@ -42,10 +42,10 @@ export interface BlueprintContext {
 
 export const BlueprintContextSchema = z.object({
   cwd: z.string(),
-  env: z.record(z.string()),
+  env: z.record(z.string(), z.string()),
   ruleFiles: z.array(z.string()),
   allowedTools: z.array(z.string()),
-  store: z.record(z.unknown()),
+  store: z.record(z.string(), z.unknown()),
 });
 
 // ─── Nodes ──────────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ export const DeterministicNodeSchema = NodeBaseSchema.extend({
   kind: z.literal('deterministic'),
   op: z.discriminatedUnion('type', [
     z.object({ type: z.literal('shell'), command: z.string(), args: z.array(z.string()).optional() }),
-    z.object({ type: z.literal('git'), action: z.enum(['checkout', 'commit', 'push', 'branch', 'worktree_add', 'worktree_remove']), params: z.record(z.string()) }),
+    z.object({ type: z.literal('git'), action: z.enum(['checkout', 'commit', 'push', 'branch', 'worktree_add', 'worktree_remove']), params: z.record(z.string(), z.string()) }),
     z.object({ type: z.literal('file'), action: z.enum(['read', 'write', 'copy', 'delete']), path: z.string(), content: z.string().optional(), dest: z.string().optional() }),
   ]),
   exitCodeMap: z.record(z.coerce.number(), z.enum(['success', 'failure', 'retry'])).optional(),
@@ -255,7 +255,7 @@ export const ExecutionStateSchema = z.object({
   runId: z.string(),
   blueprintId: z.string(),
   status: z.enum(['pending', 'running', 'completed', 'failed', 'escalated', 'abandoned']),
-  nodeExecutions: z.record(z.object({
+  nodeExecutions: z.record(z.string(), z.object({
     nodeId: z.string(),
     status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped']),
     attempts: z.number(),
@@ -277,7 +277,7 @@ export const ExecutionStateSchema = z.object({
   }).optional(),
   quality: z.object({
     gateOrder: z.array(z.string()).optional(),
-    gateOutcomes: z.record(z.enum(['success', 'failure', 'retry'])).optional(),
+    gateOutcomes: z.record(z.string(), z.enum(['success', 'failure', 'retry'])).optional(),
     evaluatorOverall: z.number().optional(),
   }).optional(),
 });

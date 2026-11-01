@@ -1,3 +1,4 @@
+import { projectIdForTrace } from './scope.js';
 import type {
   SessionTrace,
   SessionEvent,
@@ -26,6 +27,7 @@ import type { EvidenceRef, LessonCategory } from './lesson.js';
 export const DETECTOR_VERSION = '1';
 
 export interface LessonCandidate {
+  projectId?: string;
   detectorId: string;
   detectorVersion: string;
   sessionId: string;
@@ -448,6 +450,7 @@ function makeCandidate(
     detectorId: fields.detectorId,
     detectorVersion: DETECTOR_VERSION,
     sessionId: input.trace.sessionId,
+    projectId: projectIdForTrace(input.trace),
     candidateKey: dimPart ? `${fields.detectorId}|${dimPart}` : fields.detectorId,
     dims: fields.dims,
     statement: fields.statement,
@@ -459,8 +462,8 @@ function makeCandidate(
   };
 }
 
-// Cross-platform basename: trace paths arrive in whatever separator the
-// source OS used; node:path.basename only splits the host platform's.
+
+// Trace paths use their source platform's separator.
 function baseName(p: string): string {
   const parts = p.split(/[\\/]/);
   return parts[parts.length - 1] || p;
